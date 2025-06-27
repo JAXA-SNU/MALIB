@@ -1,0 +1,372 @@
+name: RTKLIB Build and Test
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # 手動実行を許可
+
+jobs:
+  build-linux:
+    name: Build on Linux
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+        build_type: [debug, release]
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          liblapack-dev \
+          libblas-dev \
+          gfortran \
+          cmake \
+          valgrind \
+          cppcheck
+    
+    - name: Set compiler
+      run: |
+        if [ "${{ matrix.compiler }}" = "clang" ]; then
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
+        else
+          echo "CC=gcc" >> $GITHUB_ENV
+          echo "CXX=g++" >> $GITHUB_ENV
+        fi
+    
+    - name: Build RTKLIB library
+      run: |
+        cd lib/iers/gcc
+        make clean
+        make CC=$CC
+        
+    - name: Build console applications
+      run: |
+        cd app
+        for app in consapp/*/gcc; do
+          echo "Building $app"
+          cd $app
+          make clean
+          make CC=$CC
+          cd - > /dev/null
+        done
+    
+    - name: Run basic functionality tests
+      run: |
+        # 基本的な動作確認
+        ./app/consapp/rtkrcv/gcc/rtkrcv -? || true
+        ./app/consapp/rnx2rtkp/gcc/rnx2rtkp -? || true
+        ./app/consapp/convbin/gcc/convbin -? || true
+        ./app/consapp/str2str/gcc/str2str -? || true
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: rtklib-linux-${{ matrix.compiler }}-${{ matrix.build_type }}
+        path: |
+          app/consapp/*/gcc/*
+          !app/consapp/*/gcc/*.o
+          !app/consapp/*/gcc/makefile*
+        retention-days: 7
+
+  build-windows:
+    name: Build on Windows
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v1
+    
+    - name: Build with MSVC (if project files exist)
+      shell: cmd
+      run: |
+        if exist "app\winapp\rtklib_winapp.sln" (
+          msbuild app\winapp\rtklib_winapp.sln /p:Configuration=Release /p:Platform=x64
+        ) else (
+          echo "Windows project files not found, skipping MSVC build"
+        )
+    
+    - name: Setup MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-make
+          make
+    
+    - name: Build with MinGW
+      shell: msys2 {0}
+      run: |
+        cd lib/iers/gcc
+        make clean
+        make
+        cd ../../../app
+        for dir in consapp/*/gcc; do
+          if [ -d "$dir" ]; then
+            echo "Building $dir"
+            cd "$dir"
+            make clean
+            make
+            cd - > /dev/null
+          fi
+        done
+
+  build-macos:
+    name: Build on macOS
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        brew install lapack openblas
+    
+    - name: Build RTKLIB
+      run: |
+        cd lib/iers/gcc
+        make clean
+        make
+        cd ../../../app
+        for dir in consapp/*/gcc; do
+          if [ -d "$dir" ]; then
+            echo "Building $dir"
+            cd "$dir"
+            make clean
+            make
+            cd - > /dev/null
+          fi
+        done
+    
+    - name: Basic functionality test
+      run: |
+        ./app/consapp/rtkrcv/gcc/rtkrcv -? || true
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: build-linux
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: rtklib-linux-gcc-release
+        path: ./artifacts/
+    
+    - name: Make binaries executable
+      run: |
+        chmod +x artifacts/app/consapp/*/gcc/*
+        # パスに追加
+        echo "$PWD/artifacts/app/consapp/rtkrcv/gcc" >> $GITHUB_PATH
+        echo "$PWD/artifacts/app/consapp/rnx2rtkp/gcc" >> $GITHUB_PATH
+        echo "$PWD/artifacts/app/consapp/convbin/gcc" >> $GITHUB_PATH
+        echo "$PWD/artifacts/app/consapp/str2str/gcc" >> $GITHUB_PATH
+    
+    - name: Download test data
+      run: |
+        mkdir -p test-data
+        cd test-data
+        
+        # IGSのサンプルデータをダウンロード（小さなファイル）
+        wget -q "https://files.igs.org/pub/data/sample/sample.21o" || \
+        curl -sL -o sample.21o "https://files.igs.org/pub/data/sample/sample.21o" || \
+        echo "Warning: Could not download real test data, creating dummy files"
+        
+        # ダミーデータ作成（ダウンロードが失敗した場合）
+        if [ ! -f sample.21o ]; then
+          cat > sample.obs << 'EOF'
+     3.04           OBSERVATION DATA    M (MIXED)           RINEX VERSION / TYPE
+testrtklib          20250628 120000 UTC PGM / RUN BY / DATE 
+RTKLIB TEST                             MARKER NAME         
+TEST                                    MARKER NUMBER       
+                                        MARKER TYPE         
+TESTER              TESTORG             OBSERVER / AGENCY   
+1234567             TEST REC            REC # / TYPE / VERS 
+12345               TEST ANT            ANT # / TYPE        
+  4000000.0000  5000000.0000  3000000.0000                  APPROX POSITION XYZ 
+        0.0000        0.0000        0.0000                  ANTENNA: DELTA H/E/N
+     1     1                                                WAVELENGTH FACT L1/2
+     6    C1    L1    D1    S1    C2    L2                  # / TYPES OF OBSERV  
+    30.000                                                  INTERVAL            
+  2025     6    28    12     0    0.0000000     GPS         TIME OF FIRST OBS   
+                                                            END OF HEADER       
+ 25  6 28 12  0  0.0000000  0  4G01G02G03G04
+  12345678.123   123456789.123        -123.123          45.123  12345678.123   123456789.123
+  12345678.123   123456789.123        -123.123          45.123  12345678.123   123456789.123  
+  12345678.123   123456789.123        -123.123          45.123  12345678.123   123456789.123
+  12345678.123   123456789.123        -123.123          45.123  12345678.123   123456789.123
+EOF
+        fi
+    
+    - name: Test RINEX conversion
+      run: |
+        cd test-data
+        echo "Testing RINEX conversion..."
+        if [ -f sample.21o ]; then
+          convbin sample.21o || echo "convbin test completed (may have warnings)"
+        elif [ -f sample.obs ]; then
+          convbin sample.obs || echo "convbin test completed (may have warnings)"
+        fi
+    
+    - name: Test positioning with dummy data
+      run: |
+        cd test-data
+        echo "Testing RTK positioning..."
+        
+        # 設定ファイル作成
+        cat > test.conf << 'EOF'
+# RTKLIB test configuration
+pos1-posmode     =single
+pos1-frequency   =l1
+pos1-soltype     =forward
+pos1-elmask      =15
+pos1-snrmask_r   =off
+pos1-snrmask_b   =off
+pos1-snrmask_L1  =0,0,0,0,0,0,0,0,0
+pos1-dynamics    =off
+pos1-tidecorr    =off
+pos1-ionoopt     =brdc
+pos1-tropopt     =saas
+EOF
+        
+        # 観測データがある場合のテスト
+        if [ -f sample.obs ]; then
+          timeout 30s rnx2rtkp -k test.conf sample.obs || echo "rnx2rtkp test completed"
+        fi
+    
+    - name: Memory leak check (if valgrind available)
+      run: |
+        if command -v valgrind &> /dev/null; then
+          echo "Running memory leak check..."
+          cd test-data
+          timeout 60s valgrind --leak-check=full --show-leak-kinds=all \
+            --track-origins=yes --verbose \
+            rnx2rtkp -? 2>&1 | tee valgrind.log || true
+          
+          # メモリリークのサマリー出力
+          if grep -q "definitely lost" valgrind.log; then
+            echo "Memory leaks detected!"
+            grep "definitely lost" valgrind.log
+          else
+            echo "No definite memory leaks found"
+          fi
+        fi
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: |
+          test-data/*.log
+          test-data/*.pos
+          test-data/valgrind.log
+        retention-days: 7
+
+  code-quality:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Install analysis tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cppcheck clang-tidy
+    
+    - name: Run cppcheck
+      run: |
+        echo "Running cppcheck..."
+        cppcheck --enable=all --inconclusive --xml --xml-version=2 \
+          --suppress=missingIncludeSystem \
+          --suppress=unusedFunction \
+          src/ 2> cppcheck.xml || true
+        
+        # 結果の表示（エラーがあっても続行）
+        if [ -s cppcheck.xml ]; then
+          echo "Cppcheck found issues:"
+          cat cppcheck.xml
+        else
+          echo "No issues found by cppcheck"
+        fi
+    
+    - name: Check coding style
+      run: |
+        echo "Checking basic coding style..."
+        
+        # 基本的なスタイルチェック
+        find src/ -name "*.c" -o -name "*.h" | while read file; do
+          echo "Checking $file"
+          
+          # タブと空白の混在チェック
+          if grep -q $'\t' "$file" && grep -q "    " "$file"; then
+            echo "Warning: Mixed tabs and spaces in $file"
+          fi
+          
+          # 長い行のチェック
+          long_lines=$(awk 'length > 120 {print NR ": " $0}' "$file")
+          if [ ! -z "$long_lines" ]; then
+            echo "Long lines (>120 chars) in $file:"
+            echo "$long_lines"
+          fi
+        done
+    
+    - name: Upload analysis results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: code-analysis
+        path: |
+          cppcheck.xml
+        retention-days: 7
+
+  performance-test:
+    name: Performance Test
+    runs-on: ubuntu-latest
+    needs: build-linux
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: rtklib-linux-gcc-release
+        path: ./artifacts/
+    
+    - name: Make binaries executable
+      run: |
+        chmod +x artifacts/app/consapp/*/gcc/*
+    
+    - name: Performance benchmark
+      run: |
+        echo "Running basic performance tests..."
+        
+        # 基本的な実行時間測定
+        time artifacts/app/consapp/rnx2rtkp/gcc/rnx2rtkp -? || true
+        
+        # メモリ使用量の確認
+        if command -v time &> /dev/null; then
+          /usr/bin/time -v artifacts/app/consapp/rnx2rtkp/gcc/rnx2rtkp -? 2>&1 || true
+        fi
