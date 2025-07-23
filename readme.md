@@ -1,5 +1,6 @@
 #
 #  MALIB : MADOCA-PPP Library
+2025
 
 MALIB is an open source program package especially for MADOCA[^1]-PPP[^2]. MALIB is fork of RTKLIB[^3].\
 MALIB support real-time positioning 'rtkrcv' and post-process positioning 'rnx2rtkp' for various receiver including L6E messages.
