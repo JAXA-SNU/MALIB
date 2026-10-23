@@ -1,7 +1,8 @@
 /*------------------------------------------------------------------------------
 * notvatel.c : NovAtel OEM7/OEM6/OEM5/OEM4/OEM3 receiver functions
 *
-*          Copyright (C) 2007-2023 by T.TAKASU, All rights reserved.
+* Copyright (C) 2024 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2007-2023 by T.TAKASU, All rights reserved.
 *
 * reference :
 *     [1] NovAtel, OM-20000094 Rev6 OEMV Family Firmware Reference Manual, 2008
@@ -15,7 +16,6 @@
 *     [7] NovAtel, OM-20000169 v24  OEM7 Commands and Logs Reference Manual,
 *         July 2023
 *
-* version : $Revision: 1.2 $ $Date: 2008/07/14 00:05:05 $
 * history : 2007/10/08 1.0 new
 *           2008/05/09 1.1 fix bug lli flag outage
 *           2008/06/16 1.2 separate common functions to rcvcmn.c

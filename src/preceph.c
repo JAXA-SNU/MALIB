@@ -1,7 +1,8 @@
 /*------------------------------------------------------------------------------
 * preceph.c : precise ephemeris and clock functions
 *
-*          Copyright (C) 2007-2021 by T.TAKASU, All rights reserved.
+* Copyright (C) 2026 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2007-2021 by T.TAKASU, All rights reserved.
 *
 * references :
 *     [1] S.Hilla, The Extended Standard Product 3 Orbit Format (SP3-c),
@@ -14,7 +15,6 @@
 *     [5] S.Hilla, The Extended Standard Product 3 Orbit Format (SP3-d),
 *         February 21, 2016
 *
-* version : $Revision: 1.1 $ $Date: 2008/07/17 21:48:06 $
 * history : 2009/01/18 1.0  new
 *           2009/01/31 1.1  fix bug on numerical error to read sp3a ephemeris
 *           2009/05/15 1.2  support glonass,galileo,qzs
@@ -51,6 +51,11 @@
 *           2021/01/14 1.18 fix bug on unable to read more than 99 satellites
 *           2021/05/21 1.19 fix invalid rollback of file pointer in readsp3h()
 *                           fix typos in comments
+*           2026/02/27 1.20 branch from ver.2.4.3b35 for MALIB
+*                           LC in satantoff() follows the MADOCA-PPP reference 
+*                            iono-free signal
+*                            handle PCO/PCV with safe deep-copy for multi-GNSS 
+*                             and multi-frequency
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
@@ -337,9 +342,10 @@ extern int readsap(const char *file, gtime_t time, nav_t *nav)
     
     for (i=0;i<MAXSAT;i++) {
         pcv=searchpcv(i+1,"",time,&pcvs);
-        nav->pcvs[i]=pcv?*pcv:pcv0;
+        if (pcv) copypcv(pcv , &nav->pcvs[i]);
+        else     copypcv(&pcv0, &nav->pcvs[i]);
     }
-    free(pcvs.pcv);
+    freepcv(&pcvs);
     return 1;
 }
 /* read DCB parameters file --------------------------------------------------*/
@@ -504,7 +510,7 @@ static int pephpos(gtime_t time, int sat, const nav_t *nav, double *rs,
     else if (c[0]!=0.0&&c[1]!=0.0) {
         dts[0]=(c[1]*t[0]-c[0]*t[1])/(t[0]-t[1]);
         i=t[0]<-t[1]?0:1;
-        std=nav->peph[index+i].std[sat-1][3]+EXTERR_CLK*fabs(t[i]);
+        std=nav->peph[index+i].std[sat-1][3]*CLIGHT+EXTERR_CLK*fabs(t[i]);
     }
     else {
         dts[0]=0.0;
@@ -570,12 +576,8 @@ static int pephclk(gtime_t time, int sat, const nav_t *nav, double *dts,
 *          double *dant       I   satellite antenna phase center offset (ecef)
 *                                 {dx,dy,dz} (m) (iono-free LC value)
 * return : none
-* notes  : iono-free LC frequencies defined as follows:
-*            GPS/QZSS : L1-L2
-*            GLONASS  : G1-G2
-*            Galileo  : E1-E5b
-*            BDS      : B1I-B2I
-*            NavIC    : L5-S
+* notes  : The frequencies of the ionofree LC are corresponding to 
+*          freq-index=0 and 1.
 *-----------------------------------------------------------------------------*/
 extern void satantoff(gtime_t time, const double *rs, int sat, const nav_t *nav,
                       double *dant)
@@ -583,8 +585,8 @@ extern void satantoff(gtime_t time, const double *rs, int sat, const nav_t *nav,
     const pcv_t *pcv=nav->pcvs+sat-1;
     double ex[3],ey[3],ez[3],es[3],r[3],rsun[3],gmst,erpv[5]={0},freq[2];
     double C1,C2,dant1,dant2;
-    int i,sys;
-    
+    int i,sys,a1,a2;
+
     trace(4,"satantoff: time=%s sat=%2d\n",time_str(time,3),sat);
     
     dant[0]=dant[1]=dant[2]=0.0;
@@ -601,37 +603,25 @@ extern void satantoff(gtime_t time, const double *rs, int sat, const nav_t *nav,
     if (!normv3(r,ey)) return;
     cross3(ey,ez,ex);
     
-    /* iono-free LC coefficients */
-    sys=satsys(sat,NULL);
-    if (sys==SYS_GPS||sys==SYS_QZS) { /* L1-L2 */
-        freq[0]=FREQ1;
-        freq[1]=FREQ2;
-    }
-    else if (sys==SYS_GLO) { /* G1-G2 */
-        freq[0]=sat2freq(sat,CODE_L1C,nav);
-        freq[1]=sat2freq(sat,CODE_L2C,nav);
-    }
-    else if (sys==SYS_GAL) { /* E1-E5b */
-        freq[0]=FREQ1;
-        freq[1]=FREQ7;
-    }
-    else if (sys==SYS_CMP) { /* B1I-B2I */
-        freq[0]=FREQ1_CMP;
-        freq[1]=FREQ2_CMP;
-    }
-    else if (sys==SYS_IRN) { /* B1I-B2I */
-        freq[0]=FREQ5;
-        freq[1]=FREQ9;
-    }
-    else return;
-    
+    /* frequency for freq-index=0,1 */
+    sys=satsys_bd2(sat,NULL,nav->pcvs[sat-1].type);
+    freq[0]=freq_num2freq(sys,freq_idx2freq_num(sys,0),0);
+    freq[1]=freq_num2freq(sys,freq_idx2freq_num(sys,1),0);
+
+        /* iono-free LC coefficients */
     C1= SQR(freq[0])/(SQR(freq[0])-SQR(freq[1]));
     C2=-SQR(freq[1])/(SQR(freq[0])-SQR(freq[1]));
     
+    /* antenna index for freq-index=0,1 */
+    a1=freq_idx2ant_idx(sys,0);
+    a2=freq_idx2ant_idx(sys,1);
+    
+    if (a1<0||a2<0) return;
+    
     /* iono-free LC */
     for (i=0;i<3;i++) {
-        dant1=pcv->off[0][0]*ex[i]+pcv->off[0][1]*ey[i]+pcv->off[0][2]*ez[i];
-        dant2=pcv->off[1][0]*ex[i]+pcv->off[1][1]*ey[i]+pcv->off[1][2]*ez[i];
+        dant1=pcv->off[a1][0]*ex[i]+pcv->off[a1][1]*ey[i]+pcv->off[a1][2]*ez[i];
+        dant2=pcv->off[a2][0]*ex[i]+pcv->off[a2][1]*ey[i]+pcv->off[a2][2]*ez[i];
         dant[i]=C1*dant1+C2*dant2;
     }
 }

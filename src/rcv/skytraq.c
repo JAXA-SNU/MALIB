@@ -23,7 +23,6 @@
 * notes   :
 *     The byte order of S1315F raw message is big-endian inconsistent to [1].
 *
-* version : $Revision:$
 * history : 2009/10/10 1.0 new
 *           2009/11/08 1.1 flip carrier-phase polarity for F/W 1.8.23-20091106
 *           2011/05/27 1.2 add almanac decoding

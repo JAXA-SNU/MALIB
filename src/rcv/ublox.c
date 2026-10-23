@@ -1,8 +1,9 @@
 /*------------------------------------------------------------------------------
 * ublox.c : ublox receiver dependent functions
 *
-*          Copyright (C) 2007-2023 by T.TAKASU, All rights reserved.
-*          Copyright (C) 2014 by T.SUZUKI, All rights reserved.
+* Copyright (C) 2024-2026 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2007-2023 by T.TAKASU, All rights reserved.
+* Copyright (C) 2014 by T.SUZUKI, All rights reserved.
 *
 * reference :
 *     [1] ublox-AG, GPS.G3-X-03002-D, ANTARIS Positioning Engine NMEA and UBX
@@ -17,8 +18,9 @@
 *         May, 2020
 *     [6] u-blox D9 QZS 1.01, UBX-21031777-R01 C1-Public, u-blox D9
 *         QZSS correction service receiver Interface Description, Sep, 2021
+*     [7] u-blox, UBXDIC-UBXDOC-304424225-19888,R01, u-blox 20 HPG 2.00
+*         High precision GNSS receiver Interface description, 22-May-2025
 *
-* version : $Revision: 1.2 $ $Date: 2008/07/14 00:05:05 $
 * history : 2007/10/08 1.0  new
 *           2008/06/16 1.1  separate common functions to rcvcmn.c
 *           2009/04/01 1.2  add range check of prn number
@@ -83,6 +85,9 @@
 *                           add L6E message decoding for UBX-RXM-QZSSL6
 *           2024/03/01 1.31 improved performance of the decode_rxmqzssl6()
 *           2024/08/02 1.32 suppress warnings
+*           2025/12/26 1.33 support input from multiple SSR data sources
+*                           support UBX-ESF-MEAS,UBX-NAV-ATT
+*           2026/01/23 1.34 fix bug for decode_esfmeas()
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
@@ -102,6 +107,8 @@
 #define ID_TRKD5    0x030A      /* ubx message id: trace mesurement data */
 #define ID_TRKMEAS  0x0310      /* ubx message id: trace mesurement data */
 #define ID_TRKSFRBX 0x030F      /* ubx message id: trace subframe buffer */
+#define ID_ESFMEAS  0x1002      /* ubx message id: external sensor fusion measurements */
+#define ID_NAVATT   0x0105      /* ubx message id: attitude solution */
 
 #define FU1         1           /* ubx message field types */
 #define FU2         2
@@ -113,8 +120,8 @@
 #define FR8         8
 #define FS32        9
 
-#define P2_10       0.0009765625 /* 2^-10 */
-
+#define P2_10       0.0009765625          /* 2^-10 */
+#define P2_12       2.441406250000000E-04 /* 2^-12 */
 #if 0
 #define CPSTD_VALID 5           /* std-dev threshold of carrier-phase valid */
 #else
@@ -178,14 +185,15 @@ static int ubx_sys(int gnssid)
     }
     return 0;
 }
-/* UBX SigId to signal (ref [5] 1.5.4) ---------------------------------------*/
+/* UBX SigID to signal (ref [6][7] 1.5.4) ---------------------------------------*/
 static int ubx_sig(int sys, int sigid)
 {
     if (sys==SYS_GPS) {
         if (sigid==0) return CODE_L1C; /* L1C/A */
         if (sigid==3) return CODE_L2L; /* L2CL */
         if (sigid==4) return CODE_L2S; /* L2CM */
-        if (sigid==7) return CODE_L5Q; /* L5Q  */
+        if (sigid==6) return CODE_L5I; /* L5I */ /* X20P */
+        if (sigid==7) return CODE_L5Q; /* L5Q */ /* X20P */
     }
     else if (sys==SYS_GLO) {
         if (sigid==0) return CODE_L1C; /* G1C/A (GLO L1 OF) */
@@ -194,22 +202,34 @@ static int ubx_sig(int sys, int sigid)
     else if (sys==SYS_GAL) {
         if (sigid==0) return CODE_L1C; /* E1C */
         if (sigid==1) return CODE_L1B; /* E1B */
-        if (sigid==4) return CODE_L5Q; /* E5aQ */
+        if (sigid==3) return CODE_L5I; /* E5aI */ /* X20P */
+        if (sigid==4) return CODE_L5Q; /* E5aQ */ /* X20P */
         if (sigid==5) return CODE_L7I; /* E5bI */
         if (sigid==6) return CODE_L7Q; /* E5bQ */
+        if (sigid==8) return CODE_L6B; /* E6 B */ /* X20P */
+        if (sigid==9) return CODE_L6C; /* E6 C */ /* X20P */
+        if (sigid==10)return CODE_L6A; /* E6 A */ /* X20P */
     }
     else if (sys==SYS_QZS) {
         if (sigid==0) return CODE_L1C; /* L1C/A */
         if (sigid==1) return CODE_L1Z; /* L1S */
         if (sigid==4) return CODE_L2S; /* L2CM */
         if (sigid==5) return CODE_L2L; /* L2CL */
-        if (sigid==9) return CODE_L5Q; /* L5Q */
+        if (sigid==8) return CODE_L5I; /* L5I */   /* X20P */
+        if (sigid==9) return CODE_L5Q; /* L5Q */   /* X20P */
+        if (sigid==12)return CODE_L1E; /* L1C/B */ /* X20P */
     }
     else if (sys==SYS_CMP) {
         if (sigid==0) return CODE_L2I; /* B1I D1 */
         if (sigid==1) return CODE_L2I; /* B1I D2 */
         if (sigid==2) return CODE_L7I; /* B2I D1 */
         if (sigid==3) return CODE_L7I; /* B2I D2 */
+        if (sigid==4) return CODE_L6I; /* B3I D1 */       /* X20P */
+        if (sigid==10)return CODE_L6I; /* B3I D2 */       /* X20P */
+        if (sigid==5) return CODE_L1P; /* B1 Cp(pilot) */ /* X20P */
+        if (sigid==6) return CODE_L1D; /* B1 Cd(data)  */ /* X20P */
+        if (sigid==7) return CODE_L5P; /* B2 ap(pilot) */ /* X20P */
+        if (sigid==8) return CODE_L5D; /* B2 ad(data)  */ /* X20P */
     }
     else if (sys==SYS_SBS) {
         if (sigid==0) return CODE_L1C; /* L1C/A */
@@ -436,6 +456,7 @@ static int decode_rxmrawx(raw_t *raw)
         raw->obs.data[j].code[idx]=(uint8_t)code;
     }
     raw->time=time;
+    trace(4,"ubx rxmrawx: %s \n",time_str(raw->time,3));
     raw->obs.n=n;
     return 1;
 }
@@ -1115,7 +1136,7 @@ static int decode_rxmsfrb(raw_t *raw)
     return 0;
 }
 /* decode UBX-RXM-QZSSL6: QZSS L6 message ------------------------------------*/
-static int decode_rxmqzssl6(raw_t *raw, rtcm_t *rtcm)
+static int decode_rxmqzssl6(raw_t *raw, rtcm_t *rtcm,int index)
 {
     static int count[16][2]={{0}};
     uint8_t *p=raw->buff+6;
@@ -1156,12 +1177,142 @@ static int decode_rxmqzssl6(raw_t *raw, rtcm_t *rtcm)
     ret=0;
     if (stat==1) {
         memcpy(rtcm->buff,p+14,250);
-        ret=decode_qzss_l6emsg(rtcm);
+        ret=decode_qzss_l6msg(rtcm,index);
     }
     return ret;
 }
+/* decode UBX-ESF-MEAS: external sensor fusion measurements ------------------*/
+static int decode_esfmeas(raw_t *raw)
+{
+    static int start=1;
+    static gtime_t starttime;
+    static uint32_t starttimetag;
+    uint32_t timetag,data,udatafield;
+    uint16_t flags;
+    uint8_t *p=raw->buff+6;
+    int32_t rawdatafield,datafield;
+    gtime_t time={0};
+    double secdiff;
+    int nummeas,datatype,i;
+    int ret=0;
+
+    if (!raw->time.time) return 0;
+    if (raw->obs.n == 0) return 0;
+
+    if (raw->len<16) {
+        trace(2,"ubx esfmeas length error: len=%d\n",raw->len);
+        return -1;
+    }
+
+    timetag = U4(p);
+    flags   = U2(p+4);
+    nummeas = (flags>>11)&31;
+
+    if (raw->len<(12+4*nummeas)) {
+        trace(2,"ubx esfmeas length error: len=%d numMeas=%d \n",
+              raw->len,nummeas);
+        return -1;
+    }
+
+    if (start==1) {
+        starttime=raw->time;
+        starttimetag=timetag;
+        start=0;
+        trace(4,"ubx esfmeas: starttime %s starttimetag=%u \n",
+              time_str(starttime,3),starttimetag);
+    }
+    secdiff=(double)timetag-(double)starttimetag;
+    secdiff/=1000.0;
+    time=timeadd(starttime, secdiff);
+
+    for (i=0; i<nummeas; i++) {
+        data = U4(p+8+i*4);
+        rawdatafield = data&0xFFFFFF;   /* bits 23-0  */
+        datatype  = (data>>24)&0x3F;    /* bits 29-24 */
+        
+        if (datatype==10) {
+            /* unsigned */
+            udatafield = rawdatafield;
+            ret=15;
+        } else {
+            /* signed (24-bit two's complement) */
+            if (rawdatafield & 0x800000) {
+                datafield = (int32_t)(rawdatafield<<8)>>8;
+            } else {
+                datafield = (int32_t)rawdatafield;
+            }
+            
+            if (datatype==14) {
+                raw->imuatt.imu.gt=time;
+                raw->imuatt.imu.gyro.gt=time;
+                raw->imuatt.imu.gyro.gyro[0]=datafield*P2_12*D2R;
+                ret=16;
+            } else if (datatype==13) {
+                raw->imuatt.imu.gyro.gyro[1]=datafield*P2_12*D2R;
+            } else if (datatype==5) {
+                raw->imuatt.imu.gyro.gyro[2]=datafield*P2_12*D2R;
+                trace(4,"ubx esfmeas: gyro %s, gyro=%.6f,%.6f,%.6f\n",
+                      time_str(time,3),raw->imuatt.imu.accel.accel[0],
+                      raw->imuatt.imu.accel.accel[1],
+                      raw->imuatt.imu.accel.accel[2]);
+            } else if (datatype==16) {
+                raw->imuatt.imu.gt=time;
+                raw->imuatt.imu.accel.gt=time;
+                raw->imuatt.imu.accel.accel[0]=datafield*P2_10;
+                ret=17;
+            } else if (datatype==17) {
+                raw->imuatt.imu.accel.accel[1]=datafield*P2_10;
+            } else if (datatype==18) {
+                raw->imuatt.imu.accel.accel[2]=datafield*P2_10;
+                trace(4,"ubx esfmeas: accel %s, accel=%.6f,%.6f,%.6f\n",
+                      time_str(time,3),raw->imuatt.imu.accel.accel[0],
+                      raw->imuatt.imu.accel.accel[1],
+                      raw->imuatt.imu.accel.accel[2]);
+            }
+        }
+    }
+
+    return ret;
+}
+/* decode UBX-NAV-ATT: attitude solution data --------------------------------*/
+static int decode_navatt(raw_t *raw)
+{
+    uint8_t *p=raw->buff+6;
+    gtime_t time={0};
+    int itow,ver,week;
+
+    if (raw->len<32) {
+        trace(2,"ubx navatt length error: len=%d\n",raw->len);
+        return -1;
+    }
+
+    itow =U4(p)*0.001;
+    ver  =U1(p+4);
+    if (ver!=0) {
+        trace(2,"ubx navatt message version error: version=%d\n",ver);
+        return -1;
+    }
+    if (raw->outtype) {
+        sprintf(raw->msgtype,"UBX NAV-ATT   (%4d): ver=%d",raw->len,ver);
+    }
+
+    if (raw->time.time) {
+        time2gpst(raw->time,&week);
+        time=gpst2time(week,itow);
+    }
+    
+    raw->imuatt.att.gt=time;
+    raw->imuatt.att.att[0]=I4(p+8)*1E-5*D2R;
+    raw->imuatt.att.att[1]=I4(p+12)*1E-5*D2R;
+    raw->imuatt.att.att[2]=I4(p+16)*1E-5*D2R;
+    raw->imuatt.att.attdot[0]=U4(p+20)*1E-5*D2R;
+    raw->imuatt.att.attdot[1]=U4(p+24)*1E-5*D2R;
+    raw->imuatt.att.attdot[2]=U4(p+28)*1E-5*D2R;
+
+    return 14;
+}
 /* decode ublox raw message --------------------------------------------------*/
-static int decode_ubx(raw_t *raw, rtcm_t *rtcm)
+static int decode_ubx(raw_t *raw, rtcm_t *rtcm, int index)
 {
     int type=(U1(raw->buff+2)<<8)+U1(raw->buff+3);
     
@@ -1177,12 +1328,14 @@ static int decode_ubx(raw_t *raw, rtcm_t *rtcm)
         case ID_RXMRAWX : return decode_rxmrawx (raw);
         case ID_RXMSFRB : return decode_rxmsfrb (raw);
         case ID_RXMSFRBX: return decode_rxmsfrbx(raw);
-        case ID_RXMQZSSL6: return decode_rxmqzssl6(raw,rtcm);
+        case ID_RXMQZSSL6: return decode_rxmqzssl6(raw,rtcm,index);
         case ID_NAVSOL  : return decode_navsol  (raw);
         case ID_NAVTIME : return decode_navtime (raw);
         case ID_TRKMEAS : return decode_trkmeas (raw);
         case ID_TRKD5   : return decode_trkd5   (raw);
         case ID_TRKSFRBX: return decode_trksfrbx(raw);
+        case ID_ESFMEAS : return decode_esfmeas (raw);
+        case ID_NAVATT  : return decode_navatt  (raw);
     }
     if (raw->outtype) {
         sprintf(raw->msgtype,"UBX 0x%02X 0x%02X (%4d)",type>>8,type&0xFF,
@@ -1200,6 +1353,7 @@ static int sync_ubx(uint8_t *buff, uint8_t data)
 * fetch next ublox raw data and input a mesasge from stream
 * args   : raw_t *raw       IO  receiver raw data control struct
 *          rtcm_t *rtcm     IO  rtcm control struct
+*          int     index    I   input stream index
 *          uint8_t data     I   stream data (1 byte)
 * return : status (-1: error message, 0: no message, 1: input observation data,
 *                  2: input ephemeris, 3: input sbas message,
@@ -1216,19 +1370,25 @@ static int sync_ubx(uint8_t *buff, uint8_t data)
 *
 *          The supported messages are as follows.
 *
-*          UBX-RXM-RAW  : raw measurement data
-*          UBX-RXM-RAWX : multi-gnss measurement data
-*          UBX-RXM-SFRB : subframe buffer
-*          UBX-RXM-SFRBX: subframe buffer extension
-*          UBX-RXM-QZSSL6: QZSS L6 message by D9C
+*          UBX-RXM-RAW    : raw measurement data
+*          UBX-RXM-RAWX   : multi-gnss measurement data
+*          UBX-RXM-SFRB   : subframe buffer
+*          UBX-RXM-SFRBX  : subframe buffer extension
+*          UBX-RXM-QZSSL6 : QZSS L6 message by D9C
+*          UBX-NAV-SOL    : navigation solution
 *          UBX-NAV-TIMEGPS: time info by D9C
+*          UBX-TRK-MEAS   : trace measurement data
+*          UBX-TRKD5      : trace measurement data
+*          UBX-TRK-SFRBX  : subframe buffer extension 
+*          UBX-ESF-MEAS   : external sensor fusion measurements
+*          UBX-NAV-ATT    : attitude solution data
 *
 *          UBX-TRK-MEAS and UBX-TRK-SFRBX are based on NEO-M8N (F/W 2.01).
 *          UBX-TRK-D5 is based on NEO-7N (F/W 1.00). They are not formally
 *          documented and not supported by u-blox.
 *          Users can use these messages by their own risk.
 *-----------------------------------------------------------------------------*/
-extern int input_ubx(raw_t *raw, rtcm_t *rtcm, uint8_t data)
+extern int input_ubx(raw_t *raw, rtcm_t *rtcm, int index, uint8_t data)
 {
     trace(5,"input_ubx: data=%02x\n",data);
     
@@ -1251,16 +1411,17 @@ extern int input_ubx(raw_t *raw, rtcm_t *rtcm, uint8_t data)
     raw->nbyte=0;
     
     /* decode ublox raw message */
-    return decode_ubx(raw,rtcm);
+    return decode_ubx(raw,rtcm,index);
 }
 /* input ublox raw message from file -------------------------------------------
 * fetch next ublox raw data and input a message from file
 * args   : raw_t  *raw      IO  receiver raw data control struct
 *          rtcm_t *rtcm     IO  rtcm control struct
+*          int     index    I   input stream index
 *          FILE   *fp       I   file pointer
 * return : status(-2: end of file, -1...9: same as above)
 *-----------------------------------------------------------------------------*/
-extern int input_ubxf(raw_t *raw, rtcm_t *rtcm, FILE *fp)
+extern int input_ubxf(raw_t *raw, rtcm_t *rtcm, int index, FILE *fp)
 {
     int i,data;
     
@@ -1286,7 +1447,7 @@ extern int input_ubxf(raw_t *raw, rtcm_t *rtcm, FILE *fp)
     raw->nbyte=0;
     
     /* decode ubx raw message */
-    return decode_ubx(raw,rtcm);
+    return decode_ubx(raw,rtcm,index);
 }
 /* convert string to integer -------------------------------------------------*/
 static int stoi(const char *s)

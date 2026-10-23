@@ -1,12 +1,12 @@
 /*------------------------------------------------------------------------------
 * rtcm3e.c : rtcm ver.3 message encoder functions
 *
-*          Copyright (C) 2012-2021 by T.TAKASU, All rights reserved.
+* Copyright (C) 2025 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2012-2021 by T.TAKASU, All rights reserved.
 *
 * references :
 *     see rtcm.c
 *
-* version : $Revision:$ $Date:$
 * history : 2012/12/05 1.0  new
 *           2012/12/16 1.1  fix bug on ssr high rate clock correction
 *           2012/12/24 1.2  fix bug on msm carrier-phase offset correction
@@ -45,6 +45,7 @@
 *                           use integer types in stdint.h
 *           2021/01/07 1.23 remove codes_*[] and replace them by msm_sig_*[]
 *                           support GLO extended SVH, SVA and flags in MT1020
+*           2025/02/06 1.24 support MT2001-2016 trop/iono correction data
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
@@ -2713,6 +2714,18 @@ extern int encode_rtcm3(rtcm_t *rtcm, int type, int subtype, int sync)
         case   14: ret=encode_ssr7(rtcm,SYS_CMP,0,sync); break; /* tentative */
         case 4073: ret=encode_type4073(rtcm,subtype,sync); break;
         case 4076: ret=encode_type4076(rtcm,subtype,sync); break;
+        case 2001: ret=encode_lcltrop(rtcm,type); break;        /* tentative */
+        case 2002: ret=encode_lcliono(rtcm,type); break;        /* tentative */
+        case 2003: ret=encode_lcliono(rtcm,type); break;        /* tentative */
+        case 2004: ret=encode_lcliono(rtcm,type); break;        /* tentative */
+        case 2005: ret=encode_lcliono(rtcm,type); break;        /* tentative */
+        case 2006: ret=encode_lcliono(rtcm,type); break;        /* tentative */
+        case 2011: ret=encode_lcltrop(rtcm,type); break;        /* tentative */
+        case 2012: ret=encode_lcliono(rtcm,type); break;        /* tentative */
+        case 2013: ret=encode_lcliono(rtcm,type); break;        /* tentative */
+        case 2014: ret=encode_lcliono(rtcm,type); break;        /* tentative */
+        case 2015: ret=encode_lcliono(rtcm,type); break;        /* tentative */
+        case 2016: ret=encode_lcliono(rtcm,type); break;        /* tentative */
     }
     if (ret>0) {
         if      (1001<=type&&type<=1299) rtcm->nmsg3[type-1000]++; /*   1-299 */

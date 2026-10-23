@@ -13,7 +13,6 @@
 *         Interface Specification for QZSS, Japan Aerospace Exploration Agency,
 *         July 31, 2009
 *
-* version : $Revision:$ $Date:$
 * history : 2007/10/14 1.0  new
 *           2009/01/24 1.1  modify sbspntpos() api
 *                           improve fast/ion correction update

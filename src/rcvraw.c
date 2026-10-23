@@ -1,8 +1,9 @@
 /*------------------------------------------------------------------------------
 * rcvraw.c : receiver raw data functions
 *
-*          Copyright (C) 2009-2021 by T.TAKASU, All rights reserved.
-*          Copyright (C) 2014 by T.SUZUKI, All rights reserved.
+* Copyright (C) 2024-2025 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2009-2021 by T.TAKASU, All rights reserved.
+* Copyright (C) 2014 by T.SUZUKI, All rights reserved.
 *
 * references :
 *     [1] IS-GPS-200K, Navstar GPS Space Segment/Navigation User Interfaces,
@@ -20,7 +21,6 @@
 *         Signal in Space ICD for Standard Positioning Service version 1.1,
 *         August, 2017
 *
-* version : $Revision:$ $Date:$
 * history : 2009/04/10 1.0  new
 *           2009/06/02 1.1  support glonass
 *           2010/07/31 1.2  support eph_t struct change
@@ -51,6 +51,7 @@
 *           2021/01/07 1.18 support GLONASS extended SVH and status flags
 *           2024/02/01 1.19 branch from ver.2.4.3b35 for MALIB
 *                           add support input L6E correction
+*           2025/12/26 1.20 support input from multiple SSR data sources
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
@@ -1472,19 +1473,20 @@ extern void free_raw(raw_t *raw)
 * args   : raw_t  *raw      IO  receiver raw data control struct
 *          rtcm_t *rtcm     IO  rtcm control struct
 *          int    format    I   receiver raw data format (STRFMT_???)
+*          int    index     I   input stream index
 *          uint8_t data     I   stream data (1 byte)
 * return : status (-1: error message, 0: no message, 1: input observation data,
 *                  2: input ephemeris, 3: input sbas message,
 *                  9: input ion/utc parameter)
 *-----------------------------------------------------------------------------*/
-extern int input_raw(raw_t *raw, rtcm_t *rtcm, int format, uint8_t data)
+extern int input_raw(raw_t *raw, rtcm_t *rtcm, int format, int index, uint8_t data)
 {
     trace(5,"input_raw: format=%d data=0x%02x\n",format,data);
     
     switch (format) {
         case STRFMT_OEM4  : return input_oem4  (raw,data);
         case STRFMT_OEM3  : return input_oem3  (raw,data);
-        case STRFMT_UBX   : return input_ubx   (raw,rtcm,data);
+        case STRFMT_UBX   : return input_ubx   (raw,rtcm,index,data);
         case STRFMT_SS2   : return input_ss2   (raw,data);
         case STRFMT_CRES  : return input_cres  (raw,data);
         case STRFMT_STQ   : return input_stq   (raw,data);
@@ -1492,7 +1494,7 @@ extern int input_raw(raw_t *raw, rtcm_t *rtcm, int format, uint8_t data)
         case STRFMT_NVS   : return input_nvs   (raw,data);
         case STRFMT_BINEX : return input_bnx   (raw,data);
         case STRFMT_RT17  : return input_rt17  (raw,data);
-        case STRFMT_SEPT  : return input_sbf   (raw,rtcm,data);
+        case STRFMT_SEPT  : return input_sbf   (raw,rtcm,index,data);
     }
     return 0;
 }
@@ -1501,17 +1503,18 @@ extern int input_raw(raw_t *raw, rtcm_t *rtcm, int format, uint8_t data)
 * args   : raw_t  *raw      IO  receiver raw data control struct
 *          rtcm_t *rtcm     IO  rtcm control struct
 *          int    format    I   receiver raw data format (STRFMT_???)
+*          int    index     I   input stream index
 *          FILE   *fp       I   file pointer
 * return : status(-2: end of file/format error, -1...31: same as above)
 *-----------------------------------------------------------------------------*/
-extern int input_rawf(raw_t *raw, rtcm_t *rtcm,int format, FILE *fp)
+extern int input_rawf(raw_t *raw, rtcm_t *rtcm, int format, int index, FILE *fp)
 {
     trace(4,"input_rawf: format=%d\n",format);
     
     switch (format) {
         case STRFMT_OEM4  : return input_oem4f  (raw,fp);
         case STRFMT_OEM3  : return input_oem3f  (raw,fp);
-        case STRFMT_UBX   : return input_ubxf   (raw,rtcm,fp);
+        case STRFMT_UBX   : return input_ubxf   (raw,rtcm,index,fp);
         case STRFMT_SS2   : return input_ss2f   (raw,fp);
         case STRFMT_CRES  : return input_cresf  (raw,fp);
         case STRFMT_STQ   : return input_stqf   (raw,fp);
@@ -1519,7 +1522,7 @@ extern int input_rawf(raw_t *raw, rtcm_t *rtcm,int format, FILE *fp)
         case STRFMT_NVS   : return input_nvsf   (raw,fp);
         case STRFMT_BINEX : return input_bnxf   (raw,fp);
         case STRFMT_RT17  : return input_rt17f  (raw,fp);
-        case STRFMT_SEPT  : return input_sbff   (raw,rtcm,fp);
+        case STRFMT_SEPT  : return input_sbff   (raw,rtcm,index,fp);
     }
     return -2;
 }

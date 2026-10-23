@@ -1,7 +1,8 @@
 /*------------------------------------------------------------------------------
 * lambda.c : integer ambiguity resolution
 *
-*          Copyright (C) 2007-2021 by T.TAKASU, All rights reserved.
+* Copyright (C) 2025 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2007-2021 by T.TAKASU, All rights reserved.
 *
 * reference :
 *     [1] P.J.G.Teunissen, The least-square ambiguity decorrelation adjustment:
@@ -10,10 +11,11 @@
 *     [2] X.-W.Chang, X.Yang, T.Zhou, MLAMBDA: A modified LAMBDA method for
 *         integer least-squares estimation, J.Geodesy, Vol.79, 552-565, 2005
 *
-* version : $Revision: 1.1 $ $Date: 2008/07/17 21:48:06 $
 * history : 2007/01/13 1.0 new
 *           2015/05/31 1.1 add api lambda_reduction(), lambda_search()
 *           2021/02/03 1.2 modify constant LOOPMAX 10000 -> 80000
+*           2025/12/26 1.3 branch from ver.2.4.3b35 for MALIB
+*                          delete unused variable and function
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 

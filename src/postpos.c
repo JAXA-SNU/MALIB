@@ -1,9 +1,9 @@
 /*------------------------------------------------------------------------------
 * postpos.c : post-processing positioning
 *
-*          Copyright (C) 2007-2021 by T.TAKASU, All rights reserved.
+* Copyright (C) 2024-2026 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2007-2021 by T.TAKASU, All rights reserved.
 *
-* version : $Revision: 1.1 $ $Date: 2008/07/17 21:48:06 $
 * history : 2007/05/08  1.0  new
 *           2008/06/16  1.1  support binary inputs
 *           2009/01/02  1.2  support new rtk positioing api
@@ -47,6 +47,24 @@
 *           2024/02/01  1.26 branch from ver.2.4.3b35 for MALIB
 *                            add support to read solution status files for ppp correction
 *           2024/08/02  1.27 update version info for solution
+*           2024/09/26  1.28 update version info for solution
+*           2024/12/20  1.29 support Bias-SINEX and FCB files correction
+*           2025/02/06  1.30 update read solution status files
+*                            add support to read local correction file
+*           2025/03/24  1.31 support ins navigation
+*                            fix bug Bias-SINEX and FCB files correction
+*           2025/12/26  1.32 support input from multiple SSR data sources
+*                            support MADOCA-PPP ionosphere corrections
+*                            add dead reckoning function
+*                            add support to read elevation mask file/read 
+*                             exclusion satellites file
+*                            add open/close PPP kf file
+*                            fix bug bia/fcb wildcard paths not detected
+*           2026/02/27  1.33 update info for solution
+*                            fix bug Bias-SINEX and FCB files correction
+*                            fix bug related to stat file timestamp replacement 
+*                            handle PCO/PCV with safe deep-copy for multi-GNSS 
+*                             and multi-frequency
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
@@ -57,34 +75,44 @@
 #define MAXINFILE   1000         /* max number of input files */
 
 /* constants/global variables ------------------------------------------------*/
+#define QZSPRNNUM (MIONO_MAX_PRN+MSSR_MAX_PRN)
 
-static pcvs_t pcvss={0};        /* satellite antenna parameters */
-static pcvs_t pcvsr={0};        /* receiver antenna parameters */
-static obs_t obss={0};          /* observation data */
-static nav_t navs={0};          /* navigation data */
-static sbs_t sbss={0};          /* sbas messages */
-static sta_t stas[MAXRCV];      /* station information */
-static int nepoch=0;            /* number of observation epochs */
-static int iobsu =0;            /* current rover observation data index */
-static int iobsr =0;            /* current reference observation data index */
-static int isbs  =0;            /* current sbas message index */
-static int revs  =0;            /* analysis direction (0:forward,1:backward) */
-static int aborts=0;            /* abort status */
-static sol_t *solf;             /* forward solutions */
-static sol_t *solb;             /* backward solutions */
-static double *rbf;             /* forward base positions */
-static double *rbb;             /* backward base positions */
-static int isolf=0;             /* current forward solutions index */
-static int isolb=0;             /* current backward solutions index */
-static char proc_rov [64]="";   /* rover for current processing */
-static char proc_base[64]="";   /* base station for current processing */
-static char rtcm_file[1024]=""; /* rtcm data file */
-static char rtcm_path[1024]=""; /* rtcm data path */
-static rtcm_t rtcm;             /* rtcm control struct */
-static FILE *fp_rtcm=NULL;      /* rtcm data file pointer */
-static char qzssl6e_file[1024]="";/* QZSS L6E data file */
-static char qzssl6e_path[1024]="";/* QZSS L6E data path */
-static FILE *fp_qzssl6e=NULL;     /* QZSS L6E data file pointer */
+typedef struct {
+    char path[1024];              /* data file path */
+    char cpath[1024];             /* data current file path */
+    FILE *fp;                     /* data file pointer */
+    rtcm_t rtcm;                  /* rtcm control struct */
+} rtcmf_t;
+
+static pcvs_t pcvss={0};          /* satellite antenna parameters */
+static pcvs_t pcvsr={0};          /* receiver antenna parameters */
+static obs_t obss={0};            /* observation data */
+static nav_t navs={0};            /* navigation data */
+static sbs_t sbss={0};            /* sbas messages */
+static sta_t stas[MAXRCV];        /* station information */
+static int nepoch=0;              /* number of observation epochs */
+static int iobsu =0;              /* current rover observation data index */
+static int iobsr =0;              /* current reference observation data index */
+static int isbs  =0;              /* current sbas message index */
+static int revs  =0;              /* analysis direction (0:forward,1:backward) */
+static int aborts=0;              /* abort status */
+static sol_t *solf;               /* forward solutions */
+static sol_t *solb;               /* backward solutions */
+static double *rbf;               /* forward base positions */
+static double *rbb;               /* backward base positions */
+static int isolf=0;               /* current forward solutions index */
+static int isolb=0;               /* current backward solutions index */
+static char proc_rov [64]="";     /* rover for current processing */
+static char proc_base[64]="";     /* base station for current processing */
+static rtcmf_t rtcmd;             /* rtcm control struct and file */
+int    qzsdn=0;                   /* number of input QZSS data file */
+static rtcmf_t *qzsd[QZSPRNNUM];  /* QZSS L6 control struct */
+int    subtype=SSR_VENDOR_NONE;   /* vendor type of substitude ssr */
+static rtcmf_t subssrd;           /* rtcm control struct and file for substitute ppp */
+static char stat_file[1024]="";   /* stat data file */
+static char cstat_file[1024]="";  /* current stat data file */
+static FILE *fp_stat=NULL;        /* stat data file pointer */
+imuatt_s_t imuatt;                /* AttEuler/ExtSensorMeas data */
 
 /* show message and check break ----------------------------------------------*/
 static int checkbrk(const char *format, ...)
@@ -128,7 +156,7 @@ static void outrpos(FILE *fp, const double *r, const solopt_t *opt)
 }
 /* output header -------------------------------------------------------------*/
 static void outheader(FILE *fp, char **file, int n, const prcopt_t *popt,
-                      const solopt_t *sopt)
+                      const solopt_t *sopt, const filopt_t *fopt)
 {
     const char *s1[]={"GPST","UTC","JST"};
     gtime_t ts,te;
@@ -143,14 +171,17 @@ static void outheader(FILE *fp, char **file, int n, const prcopt_t *popt,
     }
     if (sopt->outhead) {
         if (!*sopt->prog) {
-            fprintf(fp,"%s program   : MALIB ver.%s\n",COMMENTH,VER_MALIB);
+            fprintf(fp,"%s program    : %s(%s ver.%s)\n",COMMENTH,PROGNAME,SOFTNAME,VER_MALIB);
         }
         else {
-            fprintf(fp,"%s program   : %s\n",COMMENTH,sopt->prog);
+            fprintf(fp,"%s program    : %s\n",COMMENTH,sopt->prog);
         }
         for (i=0;i<n;i++) {
-            fprintf(fp,"%s inp file  : %s\n",COMMENTH,file[i]);
+            fprintf(fp,"%s inp file   : %s\n",COMMENTH,file[i]);
         }
+        if (strlen(fopt->bia))fprintf(fp,"%s inp file   : %s\n",COMMENTH,fopt->bia);
+        if (strlen(fopt->fcb))fprintf(fp,"%s inp file   : %s\n",COMMENTH,fopt->fcb);
+        if (strlen(fopt->dcb))fprintf(fp,"%s inp file   : %s\n",COMMENTH,fopt->dcb);
         for (i=0;i<obss.n;i++)    if (obss.data[i].rcv==1) break;
         for (j=obss.n-1;j>=0;j--) if (obss.data[j].rcv==1) break;
         if (j<i) {fprintf(fp,"\n%s no rover obs data\n",COMMENTH); return;}
@@ -164,14 +195,14 @@ static void outheader(FILE *fp, char **file, int n, const prcopt_t *popt,
         if (sopt->times==2) te=timeadd(te,9*3600.0);
         time2str(ts,s2,1);
         time2str(te,s3,1);
-        fprintf(fp,"%s obs start : %s %s (week%04d %8.1fs)\n",COMMENTH,s2,s1[sopt->times],w1,t1);
-        fprintf(fp,"%s obs end   : %s %s (week%04d %8.1fs)\n",COMMENTH,s3,s1[sopt->times],w2,t2);
+        fprintf(fp,"%s obs start  : %s %s (week%04d %8.1fs)\n",COMMENTH,s2,s1[sopt->times],w1,t1);
+        fprintf(fp,"%s obs end    : %s %s (week%04d %8.1fs)\n",COMMENTH,s3,s1[sopt->times],w2,t2);
     }
     if (sopt->outopt) {
         outprcopt(fp,popt);
     }
     if (PMODE_DGPS<=popt->mode&&popt->mode<=PMODE_FIXED&&popt->mode!=PMODE_MOVEB) {
-        fprintf(fp,"%s ref pos   :",COMMENTH);
+        fprintf(fp,"%s ref pos    :",COMMENTH);
         outrpos(fp,popt->rb,sopt);
         fprintf(fp,"\n");
     }
@@ -204,85 +235,161 @@ static int nextobsb(const obs_t *obs, int *i, int rcv)
     }
     return n;
 }
-/* update rtcm ssr correction ------------------------------------------------*/
-static void update_rtcm_ssr(gtime_t time)
+/* update rtcm ssr/iono/trop correction --------------------------------------*/
+static void update_rtcm(gtime_t time, rtcmf_t *rtcmf, int index)
 {
     char path[1024],tstr[32];
     int i;
     
     /* open or swap rtcm file */
-    reppath(rtcm_file,path,time,"","");
+    reppath(rtcmf->path,path,time,"","");
     
-    if (strcmp(path,rtcm_path)) {
-        strcpy(rtcm_path,path);
+    if (strcmp(path,rtcmf->cpath)) {
+        strcpy(rtcmf->cpath,path);
         
-        if (fp_rtcm) fclose(fp_rtcm);
-        fp_rtcm=fopen(path,"rb");
-        if (fp_rtcm) {
-            rtcm.time=time;
-            input_rtcm3f(&rtcm,fp_rtcm);
-            trace(2,"rtcm file open: %s\n",path);
+        if (rtcmf->fp) fclose(rtcmf->fp);
+        rtcmf->fp=fopen(path,"rb");
+        if (rtcmf->fp) {
+            rtcmf->rtcm.time=time;
+            input_rtcm3f(&rtcmf->rtcm,rtcmf->fp,index);
+            trace(3,"rtcm file open: %s\n",path);
+        } else {
+            trace(2,"rtcm file open error: %s\n",path);
         }
     }
-    if (!fp_rtcm) return;
+    if (!rtcmf->fp) return;
     
     /* read rtcm file until current time */
-    while (timediff(rtcm.time,time)<1E-3) {
-        strcpy(tstr,time_str(rtcm.time, 3));
-        if (input_rtcm3f(&rtcm,fp_rtcm)<-1) break;
-        trace(3, "update_rtcm_ssr: %s %s\n", time_str(time, 3), tstr);
+    while (timediff(rtcmf->rtcm.time,time)<1E-3) {
+        strcpy(tstr,time_str(rtcmf->rtcm.time, 3));
+        if (input_rtcm3f(&rtcmf->rtcm,rtcmf->fp,index)<-1) break;
+        trace(3, "update_rtcm: %s %s\n", time_str(time, 3), tstr);
         
         /* update ssr corrections */
         for (i=0;i<MAXSAT;i++) {
-            if (!rtcm.ssr[i].update||
-                rtcm.ssr[i].iod[0]!=rtcm.ssr[i].iod[1]||
-                timediff(time,rtcm.ssr[i].t0[0])<-1E-3) continue;
-            navs.ssr[i]=rtcm.ssr[i];
-            rtcm.ssr[i].update=0;
+            if (!rtcmf->rtcm.ssr[i].update||
+                rtcmf->rtcm.ssr[i].iod[0]!=rtcmf->rtcm.ssr[i].iod[1]||
+                timediff(time,rtcmf->rtcm.ssr[i].t0[0])<-1E-3) continue;
+            navs.ssr[index][i]=rtcmf->rtcm.ssr[i];
+            rtcmf->rtcm.ssr[i].update=0;
         }
+        /* update iono/trop corrections */
+        block2stat(&rtcmf->rtcm, &navs.stat);
     }
 }
-/* update QZSS L6E MADOCA-PPP corrections ------------------------------------*/
-static void update_qzssl6e(gtime_t time)
+/* update QZSS L6 corrections ------------------------------------------------*/
+static void update_qzssl6(gtime_t time, rtcmf_t *rtcmf, int index)
 {
     static int init_flg=1;
-    char path[1024],tstr[32];
-    int i;
+    char path[1024];
+    char tstr[32];
+    int i,j;
+    qzssl6_t *l6info=NULL;
 
-    /* open or swap QZSS L6E file, record bit size is 1744(w/o R-S) or 2000 */
-    reppath(qzssl6e_file,path,time,"", "");
-
-    if (strcmp(path, qzssl6e_path)) {
-        strcpy(qzssl6e_path, path);
-
-        if (fp_qzssl6e) fclose(fp_qzssl6e);
-        fp_qzssl6e=fopen(path, "rb");
-        if (fp_qzssl6e) {
-            trace(2, "qzssl6e file open: %s\n", path);
+    if (init_flg) {
+        for (i=0;i<NSTRIN;i++) {
+            init_mcssr(time,i);
         }
-    }
-    if (!fp_qzssl6e) return;
-
-    if(init_flg){
-        init_mcssr(time);
+        init_miono(time);
         init_flg=0;
     }
+    /* open or swap QZSS file, record bit size is 1744(w/o R-S) or 2000 */
+    reppath(rtcmf->path,path,time,"", "");
 
-    while (timediff(rtcm.time,time)<1E-3) {
-        strcpy(tstr,time_str(rtcm.time, 3));
-        trace(3, "update_qzssl6e: %s %s\n", time_str(time, 3), tstr);
+    if (strcmp(path, rtcmf->cpath)) {
+        strcpy(rtcmf->cpath, path);
 
-        /* update QZSS L6E MADOCA-PPP corrections */
-        for (i = 0; i < MAXSAT; i++) {
-            if (!rtcm.ssr[i].update ||
-                rtcm.ssr[i].iod[0]!=rtcm.ssr[i].iod[1]||
-                timediff(time,rtcm.ssr[i].t0[0])<-1E-3) continue;
-            navs.ssr[i]=rtcm.ssr[i];
-            rtcm.ssr[i].update=0;
+        if (rtcmf->fp) fclose(rtcmf->fp);
+        rtcmf->fp=fopen(path, "rb");
+        if (rtcmf->fp) {
+            trace(3, "qzss file open: %s\n", path);
+        }
+    }
+    if (!rtcmf->fp) {
+        trace(2, "qzss file open error: %s\n", path);
+        return;
+    }
+
+    l6info=rtcmf->rtcm.l6info;
+
+    while (timediff(rtcmf->rtcm.time,time)<1E-3) {
+        strcpy(tstr,time_str(rtcmf->rtcm.time, 3));
+        trace(3, "update_qzssl6: %s %s\n", time_str(time, 3), tstr);
+
+        switch(l6info->type) {
+            case(QZSS_L6TYPE_MSSR) :
+                /* update QZSS L6E MADOCA-PPP corrections */
+                for (i = 0; i < MAXSAT; i++) {
+                    if (!rtcmf->rtcm.ssr[i].update ||
+                        rtcmf->rtcm.ssr[i].iod[0]!=rtcmf->rtcm.ssr[i].iod[1]||
+                        timediff(time,rtcmf->rtcm.ssr[i].t0[0])<-1E-3) continue;
+                    navs.ssr[index][i]=rtcmf->rtcm.ssr[i];
+                    rtcmf->rtcm.ssr[i].update=0;
+                }
+                break;
+            case(QZSS_L6TYPE_MIONO) :
+                /* update QZSS L6D MADOCA-PPP ionospheric corrections */
+                if (l6info->re.rvalid) {
+                    navs.miono.re[l6info->rid] = l6info->re;
+                    l6info->re.rvalid=0;
+                    for (i = 0; i < MIONO_MAX_ANUM; i++) {
+                        l6info->re.area[i].avalid=0;
+                        for (j = 0; j < MAXSAT; j++) {
+                            l6info->re.area[i].sat[j].t0.time=0;
+                        }
+                    }
+                }
+                break;
+            default: break;
         }
 
-        if (input_qzssl6ef(&rtcm, fp_qzssl6e)<-1) break;
+        if (input_qzssl6f(&rtcmf->rtcm, rtcmf->fp,index)<-1) break;
     }
+}
+/* update stat corrections ---------------------------------------------------*/
+static void update_stat(gtime_t time)
+{
+    char path[1024],tstr[32],*p;
+    char st[64]="";
+    int i;
+    int siteno=0;
+    static sstat_t sstat={0};
+    static char buff[4096];
+    static int nbyte=0;
+
+    /* open or swap stat file */
+    reppath(stat_file,path,time,"", "");
+
+    if (strcmp(path, cstat_file)!=0) {
+        if (fp_stat) fclose(fp_stat);
+        fp_stat=fopen(path, "rb");
+        if (fp_stat==NULL) {
+            trace(2, "stat file open error: %s\n", path);
+        } else {
+            strcpy(cstat_file, path);
+        }
+    }
+    if (!fp_stat) return;
+    
+    /* station name as first 4 character of file */
+    if ((p=strrchr(cstat_file,FILEPATHSEP))) strncpy(st,p+1,4);
+    else strncpy(st,cstat_file,4);
+    st[4]='\0';
+    for (i=0;i<4&&st[i];i++) st[i]=toupper(st[i]);
+    
+    siteno = getstano(&navs.stat,st);
+
+    while (timediff(sstat.time,time)<1E-3) {
+        strcpy(tstr,time_str(sstat.time,3));
+        trace(3, "update_stat: %s %s st=%d\n", time_str(time, 3), tstr, siteno);
+        
+        navs.stat.time[siteno]=sstat.time;
+        memcpy(&navs.stat.sion[siteno],&sstat.sion,sizeof(ion_t)*MAXSAT);
+        memcpy(&navs.stat.strp[siteno],&sstat.strp,sizeof(trp_t));
+        
+        if (input_statf(&sstat, fp_stat, buff, &nbyte)<-1) break;
+    }
+    trace(3, "update_stat: %s %s\n", time_str(time, 3), tstr);
 }
 /* input obs data, navigation messages and sbas correction -------------------*/
 static int inputobs(obsd_t *obs, int solq, const prcopt_t *popt)
@@ -327,12 +434,24 @@ static int inputobs(obsd_t *obs, int solq, const prcopt_t *popt)
             isbs++;
         }
         /* update rtcm ssr corrections */
-        if (*rtcm_file) {
-            update_rtcm_ssr(obs[0].time);
+        if (*rtcmd.path) {
+            update_rtcm(obs[0].time, &rtcmd, STRSSR_MAIN);
         }
-        /* update QZSS L6E MADOCA-PPP corrections */
-        if (*qzssl6e_file) {
-            update_qzssl6e(obs[0].time);
+        /* update QZSS L6 */
+        for (i=0;i<qzsdn;i++) {
+            update_qzssl6(obs[0].time, qzsd[i],STRSSR_MAIN);
+        }
+        /* update substitute rtcm */
+        if (subtype==SSR_VENDOR_RTCM) {
+            update_rtcm(obs[0].time, &subssrd, STRSSR_SUB);
+        }
+        /* update substitute QZSS L6 */
+        if (subtype==SSR_VENDOR_L6) {
+            update_qzssl6(obs[0].time,&subssrd,STRSSR_SUB);
+        }
+        /* update stat corrections */
+        if (*stat_file) {
+            update_stat(obs[0].time);
         }
     }
     else { /* input backward data */
@@ -363,25 +482,71 @@ static int inputobs(obsd_t *obs, int solq, const prcopt_t *popt)
     }
     return n;
 }
+/* process ins navigation positioning ----------------------------------------*/
+static void insnavpp(rtk_t *rtk, gtime_t currt, const prcopt_t *popt)
+{
+    gtime_t inst=rtk->sol.time,upt={0};
+    int ratt=0,rimu=0,rubxins=0;
+    double misstime=0.0;
+
+    if (rtk->insd.insstat == INS_INACT) return;
+     
+    do {
+        if (strlen(popt->attfile)>0) {
+            ratt=update_att(inst, popt->attfile, &imuatt);
+        }
+        if (strlen(popt->imufile)>0) {
+            rimu=update_imu(inst, popt->imufile, &imuatt);
+        }
+        if (strlen(popt->ubxinsfile)>0) {
+            rubxins=update_ubxins(inst, popt->ubxinsfile, &imuatt);
+        }
+        inst=timeadd(inst,popt->insint);
+        if (imuatt.att.gt.time==0 || imuatt.imu.gt.time==0) {
+            misstime=misstime+popt->insint;
+            continue;
+        }
+        if (fabs(timediff(imuatt.imu.gt,upt))<1E-5) {
+            misstime=misstime+popt->insint;
+            continue;
+        }
+        upt=imuatt.imu.gt;
+        update_insnav(popt->rotimu, &imuatt, rtk);
+        trace(4,"insnavpp: %s pos=%.6f,%.6f,%.6f vel=%.6f,%.6f,%.6f\n",
+            time_str(inst,3),
+            rtk->insd.ecef[0],rtk->insd.ecef[1],rtk->insd.ecef[2],
+            rtk->insd.vel[0],rtk->insd.vel[1],rtk->insd.vel[2]);
+        rtk->insd.gt=imuatt.imu.gt;
+    } while (timediff(inst,currt)<-0.5*popt->insint);
+    rtk->insd.tor=timediff(currt,rtk->sol.time);
+    rtk->insd.misstime=misstime;
+}
 /* process positioning -------------------------------------------------------*/
 static void procpos(FILE *fp, const prcopt_t *popt, const solopt_t *sopt,
-                    int mode)
+                    int mode, const filopt_t *fopt)
 {
+    static gtime_t pretime={0};
+    static double drmisstime=0.0;
     gtime_t time={0};
     sol_t sol={{0}};
     rtk_t rtk;
     obsd_t obs[MAXOBS*2]; /* for rover and base */
     double rb[3]={0};
     int i,nobs,n,solstatic,pri[]={6,1,2,3,4,5,1,6};
-    
+    int intp=0;
+
     trace(3,"procpos : mode=%d\n",mode);
     
     solstatic=sopt->solstatic&&
               (popt->mode==PMODE_STATIC||popt->mode==PMODE_PPP_STATIC);
     
     rtkinit(&rtk,popt);
-    rtcm_path[0]='\0';
+    if (popt->dynamics==DY_INS) {
+        for (i=0;i<3;i++) rtk.insd.antimu[i]=popt->antimu[i];
+        rotate_leverarm(popt->rotimu, rtk.insd.antimu);
+    }
     
+    openkffile(&rtk,fopt);
     while ((nobs=inputobs(obs,rtk.sol.stat,popt))>=0) {
         
         /* exclude satellites */
@@ -390,9 +555,39 @@ static void procpos(FILE *fp, const prcopt_t *popt, const solopt_t *sopt,
                 popt->exsats[obs[i].sat-1]!=1) obs[n++]=obs[i];
         }
         if (n<=0) continue;
+
+        /* dead reackoning */
+        intp=0;
+        if (pretime.time!=0&&popt->drint!=0.0&&popt->dynamics==DY_INS) {
+            intp=(int)(timediff(obs[0].time,pretime)/popt->drint+.5)-1;
+        }
+        for (i=0; i<intp; i++) {
+            insnavpp(&rtk, timeadd(pretime,popt->drint), popt);
+            rtk.sol.time=timeadd(pretime,popt->drint);
+            rtk.tt=popt->drint;
+            trace(2,"procpos dr : %s i=%d intp=%d tt=%f\n",
+                time_str(rtk.sol.time,3),i,intp,rtk.tt);
+            drmisstime+=rtk.insd.misstime;
+            rtk.insd.misstime=0.0;
+            rtkpos(&rtk,obs,0,1,&navs);
+            outsol(fp,&rtk.sol,rtk.rb,sopt);
+            pretime=rtk.sol.time;
+        }
         
-        if (!rtkpos(&rtk,obs,n,&navs)) continue;
-        
+        /* ins navigation */
+        if (popt->dynamics==DY_INS)  {
+            insnavpp(&rtk, timeadd(obs[0].time,-rtk.sol.dtr[0]), popt);
+        }
+        rtk.insd.misstime+=drmisstime;
+        drmisstime=0.0;
+        if (!rtkpos(&rtk,obs,n,0,&navs)) continue;
+
+        if (rtk.sol.stat!=SOLQ_NONE) {
+            pretime=rtk.sol.time;
+        }
+
+        for (i=0;i<6;i++) rtk.prev_qr[i] = rtk.sol.qr[i];
+
         if (mode==0) { /* forward/backward */
             if (!solstatic) {
                 outsol(fp,&rtk.sol,rtk.rb,sopt);
@@ -422,6 +617,7 @@ static void procpos(FILE *fp, const prcopt_t *popt, const solopt_t *sopt,
         sol.time=time;
         outsol(fp,&sol,rb,sopt);
     }
+    closekffile(&rtk);
     rtkfree(&rtk);
 }
 /* validation of combined solutions ------------------------------------------*/
@@ -555,9 +751,15 @@ static void combres(FILE *fp, const prcopt_t *popt, const solopt_t *sopt)
         outsol(fp,&sol,rb,sopt);
     }
 }
+static void init_rtcmf(rtcmf_t *rtcmfp)
+{
+    rtcmfp->path[0]  ='\0';
+    rtcmfp->cpath[0] ='\0'; 
+    rtcmfp->fp       =NULL;
+}
 /* read prec ephemeris, sbas data, tec grid and open rtcm --------------------*/
-static void readpreceph(char **infile, int n, const prcopt_t *prcopt,
-                        nav_t *nav, sbs_t *sbs)
+static int readpreceph(char **infile, int n, const prcopt_t *prcopt,
+                        const filopt_t *fopt, nav_t *nav, sbs_t *sbs)
 {
     seph_t seph0={0};
     int i;
@@ -579,16 +781,6 @@ static void readpreceph(char **infile, int n, const prcopt_t *prcopt,
         if (strstr(infile[i],"%r")||strstr(infile[i],"%b")) continue;
         readrnxc(infile[i],nav);
     }
-    /* read solution status files for ppp correction */
-    for (i=0;i<n;i++) {
-        if (strstr(infile[i],"%r")||strstr(infile[i],"%b")) continue;
-        if ((ext=strrchr(infile[i],'.'))&&
-            (!strcmp(ext,".stat")||!strcmp(ext,".STAT")||
-             !strcmp(ext,".stec")||!strcmp(ext,".STEC")||
-             !strcmp(ext,".trp" )||!strcmp(ext,".TRP" ))) {
-            pppcorr_read(&nav->pppcorr,infile[i]);
-        }
-    }
     /* read sbas message files */
     for (i=0;i<n;i++) {
         if (strstr(infile[i],"%r")||strstr(infile[i],"%b")) continue;
@@ -599,33 +791,70 @@ static void readpreceph(char **infile, int n, const prcopt_t *prcopt,
     if (!(nav->seph=(seph_t *)malloc(sizeof(seph_t)*nav->ns))) {
          showmsg("error : sbas ephem memory allocation");
          trace(1,"error : sbas ephem memory allocation");
-         return;
+         return 0;
     }
     for (i=0;i<nav->ns;i++) nav->seph[i]=seph0;
     
     /* set rtcm file and initialize rtcm struct */
-    rtcm_file[0]   =rtcm_path[0]   ='\0'; fp_rtcm   =NULL;
-    qzssl6e_file[0]=qzssl6e_path[0]='\0'; fp_qzssl6e=NULL;
-    
+    stat_file[0]   =cstat_file[0]='\0'  ; fp_stat   =NULL;
+        
     for (i=0;i<n;i++) {
-        if ((ext=strrchr(infile[i],'.'))&&
-            (!strcmp(ext,".rtcm3")||!strcmp(ext,".RTCM3"))) {
-            strcpy(rtcm_file,infile[i]);
-            init_rtcm(&rtcm);
-            strcpy(rtcm.opt, prcopt->rtcmopt);
-            break;
+        ext=strrchr(infile[i],'.');
+        if (ext==NULL) continue;
+        if ((!strcmp(ext,".rtcm3")||!strcmp(ext,".RTCM3"))) {
+            init_rtcmf(&rtcmd);
+            strcpy(rtcmd.path,infile[i]);
+            init_rtcm(&rtcmd.rtcm);
+            strcpy(rtcmd.rtcm.opt, prcopt->rtcmopt);
+        }
+        if ((!strcmp(ext,".l6")||!strcmp(ext,".L6"))) {
+            /* reallocate memory for l6 data buffer */
+            if (qzsdn>=QZSPRNNUM) {
+                showmsg("error : qzss l6 file overflow %d",qzsdn);
+                trace(1,"error : qzss l6 file overflow %d",qzsdn);
+                return 0;
+            }
+            if (!(qzsd[qzsdn]=(rtcmf_t *)malloc(sizeof(rtcmf_t)))) {
+                showmsg("error : qzss l6 data memory allocation");
+                trace(1,"error : qzss l6 data memory allocation");
+                return 0;
+            }
+            init_rtcmf(qzsd[qzsdn]);
+            strcpy(qzsd[qzsdn]->path,infile[i]);
+            init_rtcm(&qzsd[qzsdn]->rtcm);
+            strcpy(qzsd[qzsdn]->rtcm.opt, prcopt->rtcmopt);
+            qzsdn++;
+        }
+        if ((!strcmp(ext,".stat")||!strcmp(ext,".STAT"))) {
+            strcpy(stat_file,infile[i]);
+        }
+        if (!strcmp(ext,".bia")||!strcmp(ext,".BIA")) {
+            strcpy(navs.biapath,infile[i]);
+        }
+        if (!strcmp(ext,".fcb")||!strcmp(ext,".FCB")) {
+            strcpy(navs.fcbpath,infile[i]);
         }
     }
-
-    for (i=0;i<n;i++) {
-        if ((ext=strrchr(infile[i],'.'))&&
-            (!strcmp(ext,".l6")||!strcmp(ext,".L6"))) {
-            strcpy(qzssl6e_file,infile[i]);
-            init_rtcm(&rtcm);
-            strcpy(rtcm.opt, prcopt->rtcmopt);
-            break;
+    if (strlen(fopt->subssr)>0) {
+        init_rtcmf(&subssrd);
+        strcpy(subssrd.path,fopt->subssr);
+        init_rtcm(&subssrd.rtcm);
+        strcpy(subssrd.rtcm.opt, prcopt->rtcmopt);
+        ext=strrchr(fopt->subssr,'.');
+        if (ext&&(!strcmp(ext,".rtcm3")||!strcmp(ext,".RTCM3"))) {
+            subtype=SSR_VENDOR_RTCM;
+        }
+        if (ext&&(!strcmp(ext,".l6")||!strcmp(ext,".L6"))) {
+            subtype=SSR_VENDOR_L6;
         }
     }
+    if (strlen(navs.biapath)==0 && strlen(fopt->bia)>0) {
+        strcpy(navs.biapath,fopt->bia);
+    }
+    if (strlen(navs.fcbpath)==0 && strlen(fopt->fcb)>0) {
+        strcpy(navs.fcbpath,fopt->fcb);
+    }
+    return 1;
 }
 /* free prec ephemeris and sbas data -----------------------------------------*/
 static void freepreceph(nav_t *nav, sbs_t *sbs)
@@ -644,8 +873,16 @@ static void freepreceph(nav_t *nav, sbs_t *sbs)
     }
     free(nav->tec ); nav->tec =NULL; nav->nt=nav->ntmax=0;
     
-    if (fp_rtcm) fclose(fp_rtcm);
-    free_rtcm(&rtcm);
+    if (rtcmd.fp) fclose(rtcmd.fp);
+    free_rtcm(&rtcmd.rtcm);
+    for (i=0;i<qzsdn;i++) {
+        if (qzsd[i]->fp) fclose(qzsd[i]->fp);
+        free_rtcm(&qzsd[i]->rtcm);
+        free(qzsd[i]);
+        qzsd[i]=NULL;
+    }
+    if (subssrd.fp) fclose(subssrd.fp);
+    free_rtcm(&subssrd.rtcm);
 }
 /* read obs and nav data -----------------------------------------------------*/
 static int readobsnav(gtime_t ts, gtime_t te, double ti, char **infile,
@@ -859,8 +1096,8 @@ static void closeses(nav_t *nav, pcvs_t *pcvs, pcvs_t *pcvr)
     trace(3,"closeses:\n");
     
     /* free antenna parameters */
-    free(pcvs->pcv); pcvs->pcv=NULL; pcvs->n=pcvs->nmax=0;
-    free(pcvr->pcv); pcvr->pcv=NULL; pcvr->n=pcvr->nmax=0;
+    freepcv(pcvs);
+    freepcv(pcvr);
     
     /* close geoid data */
     closegeoid();
@@ -890,7 +1127,7 @@ static void setpcv(gtime_t time, prcopt_t *popt, nav_t *nav, const pcvs_t *pcvs,
             trace(3,"no satellite antenna pcv: %s\n",id);
             continue;
         }
-        nav->pcvs[i]=*pcv;
+        copypcv(pcv, &nav->pcvs[i]);
     }
     for (i=0;i<(mode?2:1);i++) {
         popt->pcvr[i]=pcv0;
@@ -913,7 +1150,7 @@ static void setpcv(gtime_t time, prcopt_t *popt, nav_t *nav, const pcvs_t *pcvs,
             continue;
         }
         strcpy(popt->anttype[i],pcv->type);
-        popt->pcvr[i]=*pcv;
+        copypcv(pcv, &popt->pcvr[i]);
     }
 }
 /* read ocean tide loading parameters ----------------------------------------*/
@@ -927,7 +1164,8 @@ static void readotl(prcopt_t *popt, const char *file, const sta_t *sta)
 }
 /* write header to output file -----------------------------------------------*/
 static int outhead(const char *outfile, char **infile, int n,
-                   const prcopt_t *popt, const solopt_t *sopt)
+                   const prcopt_t *popt, const solopt_t *sopt,
+                   const filopt_t *fopt)
 {
     FILE *fp=stdout;
     
@@ -942,7 +1180,7 @@ static int outhead(const char *outfile, char **infile, int n,
         }
     }
     /* output header */
-    outheader(fp,infile,n,popt,sopt);
+    outheader(fp,infile,n,popt,sopt,fopt);
     
     if (*outfile) fclose(fp);
     
@@ -1005,6 +1243,14 @@ static int execses(gtime_t ts, gtime_t te, double ti, const prcopt_t *popt,
         reppath(fopt->dcb,path,ts,"","");
         readdcb(path,&navs,stas);
     }
+    /* read elevation mask file */
+    if (*fopt->mask) {
+        readmask(fopt->mask, popt);
+    }
+    /* read exclusion satellite file */
+    if (*fopt->exclsatsfile) {
+        read_exclsats(fopt->exclsatsfile);
+    }
     /* set antenna paramters */
     if (popt_.mode!=PMODE_SINGLE) {
         setpcv(obss.n>0?obss.data[0].time:timeget(),&popt_,&navs,&pcvss,&pcvsr,
@@ -1035,22 +1281,28 @@ static int execses(gtime_t ts, gtime_t te, double ti, const prcopt_t *popt,
         rtkopenstat(statfile,sopt->sstat);
     }
     /* write header to output file */
-    if (flag&&!outhead(outfile,infile,n,&popt_,sopt)) {
+    if (flag&&!outhead(outfile,infile,n,&popt_,sopt,fopt)) {
         freeobsnav(&obss,&navs);
         return 0;
     }
     iobsu=iobsr=isbs=revs=aborts=0;
     
+    /* check and set station name */
+    if (strlen(popt_.staname)==0) {
+        strncpy(popt_.staname,stas[0].name,sizeof(popt_.staname));
+        popt_.staname[sizeof(popt_.staname)-1]='\0';
+    }
+    
     if (popt_.mode==PMODE_SINGLE||popt_.soltype==0) {
         if ((fp=openfile(outfile))) {
-            procpos(fp,&popt_,sopt,0); /* forward */
+            procpos(fp,&popt_,sopt,0,fopt); /* forward */
             fclose(fp);
         }
     }
     else if (popt_.soltype==1) {
         if ((fp=openfile(outfile))) {
             revs=1; iobsu=iobsr=obss.n-1; isbs=sbss.n-1;
-            procpos(fp,&popt_,sopt,0); /* backward */
+            procpos(fp,&popt_,sopt,0,fopt); /* backward */
             fclose(fp);
         }
     }
@@ -1062,9 +1314,9 @@ static int execses(gtime_t ts, gtime_t te, double ti, const prcopt_t *popt,
         
         if (solf&&solb) {
             isolf=isolb=0;
-            procpos(NULL,&popt_,sopt,1); /* forward */
+            procpos(NULL,&popt_,sopt,1,fopt); /* forward */
             revs=1; iobsu=iobsr=obss.n-1; isbs=sbss.n-1;
-            procpos(NULL,&popt_,sopt,1); /* backward */
+            procpos(NULL,&popt_,sopt,1,fopt); /* backward */
             
             /* combine forward/backward solutions */
             if (!aborts&&(fp=openfile(outfile))) {
@@ -1146,7 +1398,10 @@ static int execses_b(gtime_t ts, gtime_t te, double ti, const prcopt_t *popt,
     trace(3,"execses_b: n=%d outfile=%s\n",n,outfile);
     
     /* read prec ephemeris and sbas data */
-    readpreceph(infile,n,popt,&navs,&sbss);
+    if (readpreceph(infile,n,popt,fopt,&navs,&sbss)==0) {
+        freepreceph(&navs,&sbss);
+        return 0;
+    }
     
     for (i=0;i<n;i++) if (strstr(infile[i],"%b")) break;
     
@@ -1285,7 +1540,8 @@ extern int postpos(gtime_t ts, gtime_t te, double ti, double tu,
                 ext=strrchr(infile[j],'.');
                 
                 if (ext&&(!strcmp(ext,".rtcm3")||!strcmp(ext,".RTCM3")||
-                          !strcmp(ext,".l6")   ||!strcmp(ext,".L6"))) {
+                          !strcmp(ext,".l6")   ||!strcmp(ext,".L6")   ||
+                          !strcmp(ext,".stat") ||!strcmp(ext,".STAT"))) {
                     strcpy(ifile[nf++],infile[j]);
                 }
                 else {
@@ -1297,6 +1553,12 @@ extern int postpos(gtime_t ts, gtime_t te, double ti, double tu,
                     }
                     else if (strstr(infile[j],"brdc")) {
                         ttte=timeadd(ttte,7200.0);
+                    }
+                    else if (ext&&(!strcmp(ext,".bia")||!strcmp(ext,".BIA"))) {
+                        strcpy(navs.biapath,infile[j]);
+                    }
+                    else if (ext&&(!strcmp(ext,".fcb")||!strcmp(ext,".FCB"))) {
+                        strcpy(navs.fcbpath,infile[j]);
                     }
                     nf+=reppaths(infile[j],ifile+nf,MAXINFILE-nf,tts,ttte,"","");
                 }

@@ -10,7 +10,6 @@
 *     [3] Hemisphere GPS, Hemisphere GPS Technical Reference Manual, v4.0,
 *         June 30, 2020
 *
-* version : $Revision:$ $Date:$
 * history : 2008/05/21 1.0  new
 *           2009/04/01 1.1  support sbas, set 0 to L2 observables
 *                           fix bug on getting doppler observables

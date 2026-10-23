@@ -10,7 +10,6 @@
 *         Maps based on GPS Carrier Phase Data Routinely producted by CODE
 *         Analysis Center, Proceeding of the IGS Analysis Center Workshop, 1996
 *
-* version : $Revision:$ $Date:$
 * history : 2011/03/29 1.0 new
 *           2013/03/05 1.1 change api readtec()
 *                          fix problem in case of lat>85deg or lat<-85deg

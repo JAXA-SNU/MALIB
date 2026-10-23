@@ -1,0 +1,16 @@
+#lclcmbpp/lclcmbrt sample gridfile (2025/02/06, MALIB)
+#
+#Type,BlockNumber,Points,GridMask1,GridMask2
+#Type        : local correction type(Iono=I, Trop=T)
+#BlockNumber : block number
+#Points      : number of grid poits 16 or 64
+#GridMask1   : 32bit lower grid mask at grid  0 - 31
+#              (0:not available, 1:available)
+#GridMask2   : 32bit upper grid mask at grid 32 - 63
+#              (0:not available, 1:available)
+I,4749,16,0xFFFF,0
+I,4750,16,0xFFFF,0
+I,4929,16,0xFFFF,0
+I,4930,16,0xFFFF,0
+T,1204,64,0xFFFFFFFF,0xFFFFFFFF
+T,1205,64,0xFFFFFFFF,0xFFFFFFFF

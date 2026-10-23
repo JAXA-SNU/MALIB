@@ -8,7 +8,6 @@
 *         files accumulation, NVS
 *     [2] NAVIS Navis Standard Interface Protocol BINR, NVS
 *
-* version : $Revision:$ $Date:$
 * history : 2012/01/30 1.0  first version by M.BAVARO
 *           2012/11/08 1.1  modified by T.TAKASU
 *           2013/02/23 1.2  fix memory access violation problem on arm

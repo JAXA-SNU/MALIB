@@ -1,7 +1,8 @@
 /*------------------------------------------------------------------------------
 * solution.c : solution functions
 *
-*          Copyright (C) 2007-2021 by T.TAKASU, All rights reserved.
+* Copyright (C) 2024-2026 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2007-2021 by T.TAKASU, All rights reserved.
 *
 * references :
 *     [1] National Marine Electronic Association and International Marine
@@ -9,7 +10,6 @@
 *     [2] NMEA 0183 Talker Identifier Mnemonics, March 3, 2019
 *         (https://www.nmea.org/content/STANDARDS/NMEA_0183_Standard)
 *
-* version : $Revision:$ $Date:$
 * history : 2007/11/03  1.0 new
 *           2009/01/05  1.1  add function outsols(), outsolheads(),
 *                            setsolformat(), outsolexs, outsolex
@@ -58,6 +58,8 @@
 *           2024/02/01  1.21 branch from ver.2.4.3b35 for MALIB
 *                            add arsys to solution
 *           2024/08/02  1.22 delete amb glo from solution
+*           2025/12/26  1.23 delete unused function
+*           2026/02/27  1.24 add car and signal selection to solution
 *-----------------------------------------------------------------------------*/
 #include <ctype.h>
 #include "rtklib.h"
@@ -993,40 +995,6 @@ extern void freesolstatbuf(solstatbuf_t *solstatbuf)
     free(solstatbuf->data);
     solstatbuf->data=NULL;
 }
-/* compare solution status ---------------------------------------------------*/
-static int cmpsolstat(const void *p1, const void *p2)
-{
-    solstat_t *q1=(solstat_t *)p1,*q2=(solstat_t *)p2;
-    double tt=timediff(q1->time,q2->time);
-    return tt<-0.0?-1:(tt>0.0?1:0);
-}
-/* sort and uniq solution status ---------------------------------------------*/
-static int sort_solstat(solstatbuf_t *statbuf)
-{
-    solstat_t *statbuf_data;
-    int i,n;
-    
-    trace(4,"sort_solstat: n=%d\n",statbuf->n);
-    
-    if (statbuf->n<=0) return 0;
-    
-    if (!(statbuf_data=realloc(statbuf->data,sizeof(solstat_t)*statbuf->n))) {
-        trace(1,"sort_solstat: memory allocation error\n");
-        free(statbuf->data); statbuf->data=NULL; statbuf->n=statbuf->nmax=0;
-        return 0;
-    }
-    statbuf->data=statbuf_data;
-    qsort(statbuf->data,statbuf->n,sizeof(solstat_t),cmpsolstat);
-    
-    /* remove duplicated data */
-    for (i=n=0;i<statbuf->n;i++) {
-        if (i==0||timediff(statbuf->data[i].time,statbuf->data[i-1].time)>1e-3) {
-            statbuf->data[n++]=statbuf->data[i];
-        }
-    }
-    statbuf->n=n;
-    return 1;
-}
 /* decode solution status ----------------------------------------------------*/
 static int decode_solstat(char *buff, solstat_t *stat)
 {
@@ -1457,52 +1425,86 @@ extern int outprcopts(uint8_t *buff, const prcopt_t *opt)
     const char *s8[]={
         "OFF","Continuous","Instantaneous","Fix and Hold","","",""
     };
+    const char *s9[]={
+        "off","dyna","ins"
+    };
+    const char *s10[]={ /* GPS */
+        "L1C/A-L2P","L1C/A-L2C","L1C/A-L5","L1C/A-L2","L1C/A-L2P-L5","L1C/A-L2C-L5"
+    };
+    const char *s11[]={ /* Galileo */
+        "E1-E5a","E1-E5b","E1-E5a-E5b","E1-E5a-E5b-E6"
+    };
+    const char *s12[]={ /* QZSS */
+        "L1C-L5","L1C/A-L2C","L1C/B-L5","L1C-L5-L2C","L1C/A-L2C-L5","L1C/B-L2C-L5"
+    };
+    const char *s13[]={ /* BeiDou-2 */
+        "B1I-B3I","B1I-B2I","B1I-B3I-B2I"
+    };
+    const char *s14[]={ /* BeiDou-3 */
+        "B1I-B3I","B1I-B2a","B1I-B3I-B2a"
+    };
     int i;
     char *p=(char *)buff;
     
     trace(3,"outprcopts:\n");
     
-    p+=sprintf(p,"%s pos mode  : %s\r\n",COMMENTH,s1[opt->mode]);
+    p+=sprintf(p,"%s pos mode   : %s\r\n",COMMENTH,s1[opt->mode]);
     
     if (PMODE_DGPS<=opt->mode&&opt->mode<=PMODE_PPP_FIXED) {
-        p+=sprintf(p,"%s freqs     : %s\r\n",COMMENTH,s2[opt->nf-1]);
+        p+=sprintf(p,"%s freqs      : %s\r\n",COMMENTH,s2[opt->nf-1]);
     }
     if (opt->mode>PMODE_SINGLE) {
-        p+=sprintf(p,"%s solution  : %s\r\n",COMMENTH,s3[opt->soltype]);
+        p+=sprintf(p,"%s solution   : %s\r\n",COMMENTH,s3[opt->soltype]);
     }
-    p+=sprintf(p,"%s elev mask : %.1f deg\r\n",COMMENTH,opt->elmin*R2D);
+    p+=sprintf(p,"%s elev mask  : %.1f deg\r\n",COMMENTH,opt->elmin*R2D);
     if (opt->mode>PMODE_SINGLE) {
-        p+=sprintf(p,"%s dynamics  : %s\r\n",COMMENTH,opt->dynamics?"on":"off");
-        p+=sprintf(p,"%s tidecorr  : %s\r\n",COMMENTH,opt->tidecorr?"on":"off");
+        p+=sprintf(p,"%s dynamics   : %s\r\n",COMMENTH,s9[opt->dynamics]);
+        p+=sprintf(p,"%s tidecorr   : %s\r\n",COMMENTH,opt->tidecorr?"on":"off");
     }
     if (opt->mode<=PMODE_PPP_FIXED) {
-        p+=sprintf(p,"%s ionos opt : %s\r\n",COMMENTH,s4[opt->ionoopt]);
+        p+=sprintf(p,"%s ionos opt  : %s\r\n",COMMENTH,s4[opt->ionoopt]);
     }
-    p+=sprintf(p,"%s tropo opt : %s\r\n",COMMENTH,s5[opt->tropopt]);
-    p+=sprintf(p,"%s ephemeris : %s\r\n",COMMENTH,s6[opt->sateph]);
-    p+=sprintf(p,"%s navi sys  :",COMMENTH);
+    p+=sprintf(p,"%s tropo opt  : %s\r\n",COMMENTH,s5[opt->tropopt]);
+    p+=sprintf(p,"%s ephemeris  : %s\r\n",COMMENTH,s6[opt->sateph]);
+    p+=sprintf(p,"%s navi sys   :",COMMENTH);
     for (i=0;sys[i];i++) {
         if (opt->navsys&sys[i]) p+=sprintf(p," %s",s7[i]);
     }
     p+=sprintf(p,"\r\n");
-    p+=sprintf(p,"%s ar sys    :",COMMENTH);
+    p+=sprintf(p,"%s ar sys     :",COMMENTH);
     for (i=0;sys[i];i++) {
         if (opt->arsys&sys[i]) p+=sprintf(p," %s",s7[i]);
     }
     p+=sprintf(p,"\r\n");
     if (PMODE_KINEMA<=opt->mode&&opt->mode<=PMODE_PPP_FIXED) {
-        p+=sprintf(p,"%s amb res   : %s\r\n",COMMENTH,s8[opt->modear]);
-        if (opt->thresar[0]>0.0) {
-            p+=sprintf(p,"%s val thres : %.1f\r\n",COMMENTH,opt->thresar[0]);
+        p+=sprintf(p,"%s amb res    : %s\r\n",COMMENTH,s8[opt->modear]);
+        if (opt->modear>0) {
+            p+=sprintf(p,"%s car        : %s\r\n",COMMENTH,opt->car?"on":"off");
+            if (opt->car==0) {
+                p+=sprintf(p,"%s val thres  : %.1f\r\n",COMMENTH,opt->thresar[0]);
+            }
+            else {
+                p+=sprintf(p,"%s val thres  : %.1f, %.1f\r\n",COMMENTH, 
+                           opt->thresar[5], opt->thresar[6]);
+            }
         }
+        p+=sprintf(p,"%s siggpsIIR-M: %s\r\n",COMMENTH,s10[opt->pppsig[0]]);
+        p+=sprintf(p,"%s siggpsIIF  : %s\r\n",COMMENTH,s10[opt->pppsig[1]]);
+        p+=sprintf(p,"%s siggpsIIIA : %s\r\n",COMMENTH,s10[opt->pppsig[2]]);
+        p+=sprintf(p,"%s siggal     : %s\r\n",COMMENTH,s11[opt->pppsig[3]]);
+        p+=sprintf(p,"%s sigqzs1_2  : %s\r\n",COMMENTH,s12[opt->pppsig[4]]);
+        p+=sprintf(p,"%s sigqzs2A   : %s\r\n",COMMENTH,s12[opt->pppsig[5]]);
+        p+=sprintf(p,"%s sigqzs3    : %s\r\n",COMMENTH,s12[opt->pppsig[6]]);
+        p+=sprintf(p,"%s sigbds2    : %s\r\n",COMMENTH,s13[opt->pppsig[7]]);
+        p+=sprintf(p,"%s sigbds3    : %s\r\n",COMMENTH,s14[opt->pppsig[8]]);
     }
     if (opt->mode==PMODE_MOVEB&&opt->baseline[0]>0.0) {
-        p+=sprintf(p,"%s baseline  : %.4f %.4f m\r\n",COMMENTH,
+        p+=sprintf(p,"%s baseline   : %.4f %.4f m\r\n",COMMENTH,
                    opt->baseline[0],opt->baseline[1]);
     }
     for (i=0;i<2;i++) {
         if (opt->mode==PMODE_SINGLE||(i>=1&&opt->mode>PMODE_FIXED)) continue;
-        p+=sprintf(p,"%s antenna%d  : %-21s (%7.4f %7.4f %7.4f)\r\n",COMMENTH,
+        p+=sprintf(p,"%s antenna%d   : %-21s (%7.4f %7.4f %7.4f)\r\n",COMMENTH,
                    i+1,opt->anttype[i],opt->antdel[i][0],opt->antdel[i][1],
                    opt->antdel[i][2]);
     }

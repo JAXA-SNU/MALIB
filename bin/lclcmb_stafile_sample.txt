@@ -1,0 +1,9 @@
+#lclcmbpp/lclcmbrt sample stafile (2025/02/06, MALIB)
+#
+#Type,BlockNumber
+#Type        : local correction type(Iono=I, Trop=T)
+#BlockNumber : block number
+I,4750
+I,4929
+T,1204
+T,1205

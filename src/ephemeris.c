@@ -1,7 +1,8 @@
 /*------------------------------------------------------------------------------
 * ephemeris.c : satellite ephemeris and clock functions
 *
-*          Copyright (C) 2010-2021 by T.TAKASU, All rights reserved.
+* Copyright (C) 2024-2026 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2010-2021 by T.TAKASU, All rights reserved.
 *
 * references :
 *     [1] IS-GPS-200K, Navstar GPS Space Segment/Navigation User Interfaces,
@@ -25,9 +26,10 @@
 *         Navigation office, February, 2019
 *     [10] RTCM Standard 10403.3, Differential GNSS (Global Navigation
 *         Satellite Systems) Services - version 3, October 7, 2016
-*     [11] CAO IS-QZSS-MDC-002, November, 2023
+*     [11] CAO IS-QZSS-MDC-004, May, 2025
+*     [12] RTCM Paper 107-2014-SC104-818, Proposal of new RTCM SSR Messages
+*          SSR Stage 1: Galileo, QZSS, SBAS, BDS, 2014
 *
-* version : $Revision:$ $Date:$
 * history : 2010/07/28 1.1  moved from rtkcmn.c
 *                           added api:
 *                               eph2clk(),geph2clk(),seph2clk(),satantoff()
@@ -74,6 +76,9 @@
 *           2021/05/21 1.15 fix typos
 *           2024/02/01 1.16 branch from ver.2.4.3b35 for MALIB
 *                           change constant MAXAGESSR 90.0 -> 60.0
+*           2024/12/20 1.17 update seleph() to use toes % 8192 for BeiDou
+*           2025/12/26 1.18 support input from multiple SSR data sources
+*           2026/02/27 1.19 update seleph() for MADOCA-SSR CSSR
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
@@ -427,8 +432,10 @@ static eph_t *seleph(gtime_t time, int sat, int iode, const nav_t *nav)
 {
     double t,tmax,tmin;
     int i,j=-1,sys,sel;
-    
-    trace(4,"seleph  : time=%s sat=%2d iode=%d\n",time_str(time,3),sat,iode);
+    char satid[8];
+
+    satno2id(sat,satid);
+    trace(4,"seleph  : time=%s sat=%s iode=%d\n",time_str(time,3),satid,iode);
     
     sys=satsys(sat,NULL);
     switch (sys) {
@@ -443,7 +450,23 @@ static eph_t *seleph(gtime_t time, int sat, int iode, const nav_t *nav)
     
     for (i=0;i<nav->n;i++) {
         if (nav->eph[i].sat!=sat) continue;
-        if (iode>=0&&nav->eph[i].iode!=iode) continue;
+        if (sys==SYS_CMP) {
+            /* Note, BDS ephemeris binding: compare toe modulo 2048 so it works 
+               with RTCM3 SSR (10-bit IODE in 8 s steps DF470 ref [12]) 
+               and MADOCA-SSR CSSR (8-bit IODE). */
+            if ((iode>=0&&((int)nav->eph[i].toes%2048)!=(iode*8)%2048)
+                && (iode>=0&&(int)nav->eph[i].toes % 8192!=iode)) {
+                trace(4,"seleph: skip BDS ephemeris iode=%d toes=%d\n",
+                      iode, (int)nav->eph[i].toes);
+                continue;
+            } else if (iode>=0) {
+                trace(4,"seleph: select BDS ephemeris iode=%d toes=%d\n",
+                      iode, (int)nav->eph[i].toes);
+            }
+        }
+        else {
+            if (iode>=0&&nav->eph[i].iode!=iode) continue;
+        }
         if (sys==SYS_GAL) {
             sel=getseleph(SYS_GAL);
             if (sel==0&&!(nav->eph[i].code&(1<<9))) continue; /* I/NAV */
@@ -455,8 +478,8 @@ static eph_t *seleph(gtime_t time, int sat, int iode, const nav_t *nav)
         if (t<=tmin) {j=i; tmin=t;} /* toe closest to time */
     }
     if (iode>=0||j<0) {
-        trace(3,"no broadcast ephemeris: %s sat=%2d iode=%3d\n",
-              time_str(time,0),sat,iode);
+        trace(3,"no broadcast ephemeris: %s sat=%s iode=%3d\n",
+              time_str(time,0),satid,iode);
         return NULL;
     }
     return nav->eph+j;
@@ -606,7 +629,8 @@ static int satpos_sbas(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
 }
 /* satellite position and clock with ssr correction --------------------------*/
 static int satpos_ssr(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
-                      int opt, double *rs, double *dts, double *var, int *svh)
+                      int opt, int selssr, double *rs, double *dts, double *var,
+                      int *svh)
 {
     const ssr_t *ssr;
     eph_t *eph;
@@ -615,7 +639,7 @@ static int satpos_ssr(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
     
     trace(4,"satpos_ssr: time=%s sat=%2d\n",time_str(time,3),sat);
     
-    ssr=nav->ssr+sat-1;
+    ssr=nav->ssr[selssr]+sat-1;
     
     if (!ssr->t0[0].time) {
         trace(2,"no ssr orbit correction: %s sat=%2d\n",time_str(time,0),sat);
@@ -707,8 +731,9 @@ static int satpos_ssr(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
 * args   : gtime_t time     I   time (gpst)
 *          gtime_t teph     I   time to select ephemeris (gpst)
 *          int    sat       I   satellite number
-*          nav_t  *nav      I   navigation data
 *          int    ephopt    I   ephemeris option (EPHOPT_???)
+*          nav_t  *nav      I   navigation data
+*          int    selssr    I   select SSR
 *          double *rs       O   sat position and velocity (ecef)
 *                               {x,y,z,vx,vy,vz} (m|m/s)
 *          double *dts      O   sat clock {bias,drift} (s|s/s)
@@ -719,18 +744,18 @@ static int satpos_ssr(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
 *          satellite clock does not include code bias correction (tgd or bgd)
 *-----------------------------------------------------------------------------*/
 extern int satpos(gtime_t time, gtime_t teph, int sat, int ephopt,
-                  const nav_t *nav, double *rs, double *dts, double *var,
-                  int *svh)
+                  const nav_t *nav, int selssr, double *rs, double *dts, 
+                  double *var, int *svh)
 {
     trace(4,"satpos  : time=%s sat=%2d ephopt=%d\n",time_str(time,3),sat,ephopt);
     
     *svh=0;
     
     switch (ephopt) {
-        case EPHOPT_BRDC  : return ephpos     (time,teph,sat,nav,-1,rs,dts,var,svh);
-        case EPHOPT_SBAS  : return satpos_sbas(time,teph,sat,nav,   rs,dts,var,svh);
-        case EPHOPT_SSRAPC: return satpos_ssr (time,teph,sat,nav, 0,rs,dts,var,svh);
-        case EPHOPT_SSRCOM: return satpos_ssr (time,teph,sat,nav, 1,rs,dts,var,svh);
+        case EPHOPT_BRDC  : return ephpos     (time,teph,sat,nav,-1,       rs,dts,var,svh);
+        case EPHOPT_SBAS  : return satpos_sbas(time,teph,sat,nav,          rs,dts,var,svh);
+        case EPHOPT_SSRAPC: return satpos_ssr (time,teph,sat,nav, 0,selssr,rs,dts,var,svh);
+        case EPHOPT_SSRCOM: return satpos_ssr (time,teph,sat,nav, 1,selssr,rs,dts,var,svh);
         case EPHOPT_PREC  :
             if (!peph2pos(time,sat,nav,1,rs,dts,var)) break; else return 1;
     }
@@ -744,11 +769,12 @@ extern int satpos(gtime_t time, gtime_t teph, int sat, int ephopt,
 *          int    n         I   number of observation data
 *          nav_t  *nav      I   navigation data
 *          int    ephopt    I   ephemeris option (EPHOPT_???)
+*          int    selssr    I   select SSR
 *          double *rs       O   satellite positions and velocities (ecef)
 *          double *dts      O   satellite clocks
 *          double *var      O   sat position and clock error variances (m^2)
 *          int    *svh      O   sat health flag (-1:correction not available)
-* return : none
+* return : number of valid satellites
 * notes  : rs [(0:2)+i*6]= obs[i] sat position {x,y,z} (m)
 *          rs [(3:5)+i*6]= obs[i] sat velocity {vx,vy,vz} (m/s)
 *          dts[(0:1)+i*2]= obs[i] sat clock {bias,drift} (s|s/s)
@@ -761,12 +787,14 @@ extern int satpos(gtime_t time, gtime_t teph, int sat, int ephopt,
 *          any pseudorange and broadcast ephemeris are always needed to get
 *          signal transmission time
 *-----------------------------------------------------------------------------*/
-extern void satposs(gtime_t teph, const obsd_t *obs, int n, const nav_t *nav,
-                    int ephopt, double *rs, double *dts, double *var, int *svh)
+extern int satposs(gtime_t teph, const obsd_t *obs, int n, const nav_t *nav,
+                    int ephopt, int selssr, double *rs, double *dts, double *var,
+                    int *svh)
 {
     gtime_t time[2*MAXOBS]={{0}};
     double dt,pr;
     int i,j;
+    int ndata=0;
     
     trace(3,"satposs : teph=%s n=%d ephopt=%d\n",time_str(teph,3),n,ephopt);
     
@@ -793,8 +821,8 @@ extern void satposs(gtime_t teph, const obsd_t *obs, int n, const nav_t *nav,
         time[i]=timeadd(time[i],-dt);
         
         /* satellite position and clock at transmission time */
-        if (!satpos(time[i],teph,obs[i].sat,ephopt,nav,rs+i*6,dts+i*2,var+i,
-                    svh+i)) {
+        if (!satpos(time[i],teph,obs[i].sat,ephopt,nav,selssr,rs+i*6,dts+i*2,
+                    var+i,svh+i)) {
             trace(3,"no ephemeris %s sat=%2d\n",time_str(time[i],3),obs[i].sat);
             continue;
         }
@@ -804,12 +832,14 @@ extern void satposs(gtime_t teph, const obsd_t *obs, int n, const nav_t *nav,
             dts[1+i*2]=0.0;
             *var=SQR(STD_BRDCCLK);
         }
+        ndata++;
     }
     for (i=0;i<n&&i<2*MAXOBS;i++) {
         trace(4,"%s sat=%2d rs=%13.3f %13.3f %13.3f dts=%12.3f var=%7.3f svh=%02X\n",
               time_str(time[i],6),obs[i].sat,rs[i*6],rs[1+i*6],rs[2+i*6],
               dts[i*2]*1E9,var[i],svh[i]);
     }
+    return ndata;
 }
 /* set selected satellite ephemeris --------------------------------------------
 * Set selected satellite ephemeris for multiple ones like LNAV - CNAV, I/NAV -
@@ -834,7 +864,7 @@ extern void setseleph(int sys, int sel)
         case SYS_SBS: eph_sel[6]=sel; break;
     }
 }
-/* get selected satellite ephemeris -------------------------------------------
+/* get selected satellite ephemeris --------------------------------------------
 * Get the selected satellite ephemeris.
 * args   : int    sys       I   satellite system (SYS_???)
 * return : selected ephemeris

@@ -19,7 +19,6 @@
 *          2020
 *     [19] MJ-2014-GM4, Rev.2.5,March 3, 2023
 *
-* version : $Revision:$ $Date:$
 * history : 2009/04/10 1.0  new
 *           2009/06/29 1.1  support type 1009-1012 to get synchronous-gnss-flag
 *           2009/12/04 1.2  support type 1010,1012,1020
@@ -45,12 +44,13 @@
 *                           delete references [2]-[6],[8],[9],[11]-[14]
 *                           update reference [17]
 *                           use integer types in stdint.h
+*           2025/12/26 1.13 support input from multiple SSR data sources
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
 /* function prototypes -------------------------------------------------------*/
 extern int decode_rtcm2(rtcm_t *rtcm);
-extern int decode_rtcm3(rtcm_t *rtcm);
+extern int decode_rtcm3(rtcm_t *rtcm, int index);
 extern int encode_rtcm3(rtcm_t *rtcm, int type, int subtype, int sync);
 
 /* constants -----------------------------------------------------------------*/
@@ -119,6 +119,9 @@ extern int init_rtcm(rtcm_t *rtcm)
     for (i=0;i<MAXOBS   ;i++) rtcm->obs.data[i]=data0;
     for (i=0;i<MAXSAT*2 ;i++) rtcm->nav.eph [i]=eph0;
     for (i=0;i<MAXPRNGLO;i++) rtcm->nav.geph[i]=geph0;
+    
+    if (init_l6info(rtcm)==0) return 0;
+    
     return 1;
 }
 /* free rtcm control ----------------------------------------------------------
@@ -134,6 +137,7 @@ extern void free_rtcm(rtcm_t *rtcm)
     free(rtcm->obs.data); rtcm->obs.data=NULL; rtcm->obs.n=0;
     free(rtcm->nav.eph ); rtcm->nav.eph =NULL; rtcm->nav.n=0;
     free(rtcm->nav.geph); rtcm->nav.geph=NULL; rtcm->nav.ng=0;
+    free_l6info(rtcm);
 }
 /* input RTCM 2 message from stream --------------------------------------------
 * fetch next RTCM 2 message and input a message from byte stream
@@ -194,6 +198,7 @@ extern int input_rtcm2(rtcm_t *rtcm, uint8_t data)
 * fetch next RTCM 3 message and input a message from byte stream
 * args   : rtcm_t *rtcm     IO  rtcm control struct
 *          uint8_t data     I   stream data (1 byte)
+*          int     index    I   input stream index
 * return : status (-1: error message, 0: no message, 1: input observation data,
 *                  2: input ephemeris, 5: input station pos/ant parameters,
 *                  10: input ssr messages)
@@ -261,7 +266,7 @@ extern int input_rtcm2(rtcm_t *rtcm, uint8_t data)
 *            |<-- 8 --->|<- 6 -->|<-- 10 --->|<--- length x 8 --->|<-- 24 -->|
 *            
 *-----------------------------------------------------------------------------*/
-extern int input_rtcm3(rtcm_t *rtcm, uint8_t data)
+extern int input_rtcm3(rtcm_t *rtcm, uint8_t data, int index)
 {
     trace(5,"input_rtcm3: data=%02x\n",data);
     
@@ -285,7 +290,7 @@ extern int input_rtcm3(rtcm_t *rtcm, uint8_t data)
         return 0;
     }
     /* decode rtcm3 message */
-    return decode_rtcm3(rtcm);
+    return decode_rtcm3(rtcm,index);
 }
 /* input RTCM 2 message from file ----------------------------------------------
 * fetch next RTCM 2 message and input a messsage from file
@@ -309,11 +314,12 @@ extern int input_rtcm2f(rtcm_t *rtcm, FILE *fp)
 /* input RTCM 3 message from file ----------------------------------------------
 * fetch next RTCM 3 message and input a messsage from file
 * args   : rtcm_t *rtcm     IO  rtcm control struct
-*          FILE  *fp        I   file pointer
+*          FILE   *fp       I   file pointer
+*          int    index     I   input stream index
 * return : status (-2: end of file, -1...10: same as above)
 * notes  : same as above
 *-----------------------------------------------------------------------------*/
-extern int input_rtcm3f(rtcm_t *rtcm, FILE *fp)
+extern int input_rtcm3f(rtcm_t *rtcm, FILE *fp, int index)
 {
     int i,data=0,ret;
     
@@ -321,7 +327,7 @@ extern int input_rtcm3f(rtcm_t *rtcm, FILE *fp)
     
     for (i=0;i<4096;i++) {
         if ((data=fgetc(fp))==EOF) return -2;
-        if ((ret=input_rtcm3(rtcm,(uint8_t)data))) return ret;
+        if ((ret=input_rtcm3(rtcm,(uint8_t)data,index))) return ret;
     }
     return 0; /* return at every 4k bytes */
 }

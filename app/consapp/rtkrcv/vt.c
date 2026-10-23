@@ -3,7 +3,6 @@
 *
 *          Copyright (C) 2014-2016 by T.TAKASU, All rights reserved.
 *
-* version : $Revision:$ $Date:$
 * history : 2015/01/11 1.0  separated from rtkrcv.c
 *           2016/09/19 1.1  change api vt_open()
 *-----------------------------------------------------------------------------*/

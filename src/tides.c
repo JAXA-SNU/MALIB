@@ -16,7 +16,6 @@
 *     [5] G.Petit and B.Luzum (eds), IERS Technical Note No. 36, IERS
 *         Conventions (2010), 2010
 *
-* version : $Revision:$ $Date:$
 * history : 2015/05/10 1.0  separated from ppp.c
 *           2015/06/11 1.1  fix bug on computing days in tide_oload() (#128)
 *           2017/04/11 1.2  fix bug on calling geterp() in timdedisp()

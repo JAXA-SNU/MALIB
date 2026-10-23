@@ -113,7 +113,7 @@ git clone https://github.com/JAXA-SNU/MALIB.git
 
 * Based on RTKLIB 2.4.3 b34 modified version
 * Real-time / Post-Process positioning
-* Apply various GNSS satellites (GPS/GLONASS/GALILEO/QZSS)
+* Apply various GNSS satellites (GPS/GLONASS/GALILEO/QZSS/BEIDOU)
 * PPP and PPP-AR (Ambiguity Resolution)
 * Apply various L6E data format (e.g. ubx/sbf/msj)
 * Select frequency depends on the GNSS satellites
@@ -135,7 +135,8 @@ Download antex file
 
 Download MADOCA-PPP archive data 
 * [MADOCA Product L6E Archive](https://sys.qzss.go.jp/dod/en/archives/agree_madoca.html)
-* [MADOCA Product JAXA Archive](https://mgmds01.tksc.jaxa.jp/)
+* [MADOCA Product JAXA Archive](https://mgmds01.tksc.jaxa.jp/) 
+    (Real-time products have been discontinued since 2026/03/31.)
 >[!TIP]
 > GPS week can be checked on this HP. [Click here](https://geodesy.noaa.gov/CORS/resources/gpscals.shtml)
 
@@ -143,48 +144,89 @@ Download MADOCA-PPP archive data
 
 MALIB added these signal select and ignore chi-squared error option
 ```sh
-pos2-siggpsIIR-M   =0          # (0:L1C/A-L2P,1:L1C/A-L2C)
-pos2-siggpsIIF     =0          # (0:L1C/A-L2P,1:L1C/A-L2C,2:L1C/A-L5)
-pos2-siggpsIIIA    =0          # (0:L1C/A-L2P,1:L1C/A-L2C,2:L1C/A-L5)
-pos2-sigqzs1_2     =1          # (0:L1C-L5,1:L1C/A-L2C)
-pos2-siggal        =1          # (0:E1C-E5a,1:E1C-E5b)
-pos2-ign_chierr    =on         # (0:off,1:on)
+pos2-siggpsIIR-M =L1C/A-L2P     # GPS BLOCK IIR-M (0:L1C/A-L2P,1:L1C/A-L2C           ,3:L1C/A-L2)
+pos2-siggpsIIF   =L1C/A-L2P-L5  # GPS BLOCK IIF   (0:L1C/A-L2P,1:L1C/A-L2C,2:L1C/A-L5,3:L1C/A-L2,4:L1C/A-L2P-L5,5:L1C/A-L2C-L5)
+pos2-siggpsIIIA  =L1C/A-L2P-L5  # GPS BLOCK IIIA  (0:L1C/A-L2P,1:L1C/A-L2C,2:L1C/A-L5,3:L1C/A-L2,4:L1C/A-L2P-L5,5:L1C/A-L2C-L5)
+pos2-siggal      =E1-E5a-E5b-E6 # Galileo (0:E1-E5a,1:E1-E5b,2:E1-E5a-E5b,3:E1-E5a-E5b-E6)
+pos2-sigqzs1_2   =L1C-L5-L2C    # QZSS Block I and II (QZS02,03,04) (0:L1C-L5,1:L1C/A-L2C           ,3:L1C-L5-L2C,4:L1C/A-L2C-L5)
+pos2-sigqzs2A    =L1C-L5-L2C    # QZSS Block IIA (QZS1R)            (0:L1C-L5,1:L1C/A-L2C,2:L1C/B-L5,3:L1C-L5-L2C,4:L1C/A-L2C-L5,5:L1C/B-L2C-L5)
+pos2-sigqzs3     =L1C-L5        # QZSS Block III (QZS05,06,07)      (0:L1C-L5            ,2:L1C/B-L5)
+pos2-sigbds2     =B1I-B3I-B2I   # BeiDou-2 (0:B1I-B3I,1:B1I-B2I,2:B1I-B3I-B2I)
+pos2-sigbds3     =B1I-B3I-B2a   # BeiDou-3 (0:B1I-B3I,1:B1I-B2a,2:B1I-B3I-B2a,9:B1C-B2a)
+
+pos2-ign_chierr    =on            # (0:off,1:on)
 ```
 
-If you want to use NTRIP
+### Configuration Examples
+Depending on your use case, use one of the following configurations.
+
+<details><summary> use stream </summary> 
+
 ```sh
 # str1 : Your GNSS Receiver data
 # str2 : Correction data (e.g. RTK/DGNSS/Local Augmentation)
-# str3 : Correction data (e.g. PPP)
+# str3 : Correction data (e.g. Main Correction data)
+# str4 : Correction data (e.g. Sub Correction data)
 
 # Input stream type
-# 0:off,1:serial,2:file,3:tcpsvr,4:tcpcli,7:ntripcli,8:ftp,9:http
+# 0:off,1:serial,2:file,3:tcpsvr,4:tcpcli,6:ntripcli,7:ftp,8:http,10:udpsvr,11:udpcli
 inpstr1-type       =ntripcli    
 inpstr2-type       =ntripcli   # if needed
 inpstr3-type       =ntripcli
+inpstr4-type       =tcpcli     # if needed
 
 # Input stream path
 inpstr1-path       =[user[:passwd]]@addr:port/mntpnt
 inpstr2-path       =[user[:passwd]]@addr:port/mntpnt   # if needed                 
 inpstr3-path       =[user[:passwd]]@addr:port/mntpnt
+inpstr4-path       =tcpcli://localhost:11000           # if needed  
 
 # Input stream format 
 # 0:rtcm2,1:rtcm3,2:oem4,3:oem3,4:ubx,5:ss2,6:hemis,7:skytraq,8:javad,9:nvs
-# 10:binex,11:rt17,12:sbf,14:sp3,20:stat,21:l6e
+# 10:binex,11:rt17,12:sbf,14:sp3,15:l6,20:stat
 inpstr1-format     =rtcm3       
 inpstr2-format     =stat   # if needed 
-inpstr3-format     =rtcm3       
-```
+inpstr3-format     =rtcm3    
+inpstr4-format     =l6     # if needed 
 
-if you want to use replay on rtkrcv, add ```::T::x(time)::+(offset)```
+# SSR data type (0:main,1:sub,-1:off)
+# (Each of MAIN and SUB can be assigned only once across all streams)
+inpstr1-ssr        =off
+inpstr2-ssr        =off
+inpstr3-ssr        =main
+inpstr4-ssr        =sub
+```
+</details>
+
+<details><summary> use replay on rtkrcv </summary> 
+
+Add the following option ```::T::x(time)::+(offset)```
 ```sh
 # e.g. skip replay data for 10s and offset +30 sec
+inpstr1-type       =file
 inpstr1-path       =datapath/dataname.rtcm3::T::x10::+30
 ```
 > [!WARNING]
 > when you use MADOCA Product as ephemeris\
 > ```pos1-sateph        =brdc+ssrapc```\
 > then, ``` pos2-ign_chierr = on ```
+</details>
+
+<details><summary> use MADOCA-PPP Ionospheric Correction </summary> 
+
+```sh
+pos2-ionocorr      =on
+```
+> [!WARNING]
+> If you use L6D, make sure to use L6E.
+</details>
+
+<details><summary> use INS data </summary> 
+
+```sh
+pos1-dynamics      =2  # Receiver Dynamics (0:off,1:dynamics,2:ins)
+```
+</details>
 
 ## CUI (rtkrcv/rnx2rtkp)
 
@@ -199,17 +241,20 @@ rtkrcv [-s][-p port][-d dev][-o file][-w pwd][-r level][-t level][-sta sta]
 
 Options
 ```sh
-  -s         start RTK server on program startup
-  -p port    port number for telnet console
-  -m port    port number for monitor stream
-  -d dev     terminal device for console
-  -o file    processing options file
-  -w pwd     login password for remote console ("": no password)
-  -r level   output solution status file (0:off,1:states,2:residuals)
-  -t level   debug trace level (0:off,1-5:on)
-  -sta sta   station name for receiver dcb
-  -v|-ver    print version
-  -rst ds ts start day/time (ds=y/m/d ts=h:m:s) [raw/rtcm data start time]
+  -s          start RTK server on program startup
+  -p port     port number for telnet console
+  -m port     port number for monitor stream
+  -d dev      terminal device for console
+  -o file     processing options file
+  -w pwd      login password for remote console ("": no password)
+  -r level    output solution status file (0:off,1:states,2:residuals)
+  -t level    debug trace level (0:off,1-5:on)
+  -opkf level output PPP kalman filter state/covariance
+              (0:off,1:states,2:states+dcov,3:states+dcov+ccov) [0]
+  -sta sta    station name for receiver dcb
+  -v|-ver     print version
+  -rst ds ts  start day/time (ds=y/m/d ts=h:m:s) [raw/rtcm data start time]
+  -ignsync    ignore time sync for input files [sync]
 ```
 
 Example
@@ -258,38 +303,48 @@ rnx2rtkp [option]... file file [...]
 
 Options
 ```sh
- -?        print help
- -k file   input options from configuration file [off]
- -o file   set output file [stdout]
- -ts ds ts start day/time (ds=y/m/d ts=h:m:s) [obs start time]
- -te de te end day/time   (de=y/m/d te=h:m:s) [obs end time]
- -ti tint  time interval (sec) [all]
- -p mode   mode (0:single,1:dgps,2:kinematic,3:static,4:moving-base,
-                 5:fixed,6:ppp-kinematic,7:ppp-static) [2]
- -m mask   elevation mask angle (deg) [15]
- -sys s[,s...] nav system(s) (s=G:GPS,R:GLO,E:GAL,J:QZS,C:BDS,I:IRN) [G|R]
- -f freq   number of frequencies for relative mode (1:L1,2:L1+L2,3:L1+L2+L5) [2]
- -v thres  validation threshold for integer ambiguity (0.0:no AR) [3.0]
- -b        backward solutions [off]
- -c        forward/backward combined solutions [off]
- -i        instantaneous integer ambiguity resolution [off]
- -h        fix and hold for integer ambiguity resolution [off]
- -e        output x/y/z-ecef position [latitude/longitude/height]
- -a        output e/n/u-baseline [latitude/longitude/height]
- -n        output NMEA-0183 GGA sentence [off]
- -g        output latitude/longitude in the form of ddd mm ss.ss' [ddd.ddd]
- -t        output time in the form of yyyy/mm/dd hh:mm:ss.ss [sssss.ss]
- -u        output time in utc [gpst]
- -d col    number of decimals in time [3]
- -s sep    field separator [' ']
- -r x y z  reference (base) receiver ecef pos (m) [average of single pos]
-           rover receiver ecef pos (m) for fixed or ppp-fixed mode
- -l lat lon hgt reference (base) receiver latitude/longitude/height (deg/m)
-           rover latitude/longitude/height for fixed or ppp-fixed mode
- -ign_chierr ignore chi-square error mode [off]
- -y level  output soltion status (0:off,1:states,2:residuals) [0]
- -x level  debug trace level (0:off) [0]
- -ver      print version
+ -?              print help
+ -k file         input options from configuration file [off]
+ -o file         set output file [stdout]
+ -ts ds ts       start day/time (ds=y/m/d ts=h:m:s) [obs start time]
+ -te de te       end day/time   (de=y/m/d te=h:m:s) [obs end time]
+ -ti tint        time interval (sec) [all]
+ -p mode         mode (0:single,1:dgps,2:kinematic,3:static,4:moving-base,
+                       5:fixed,6:ppp-kinematic,7:ppp-static) [2]
+ -m mask         elevation mask angle (deg) [15]
+ -sys s[,s...]   nav system(s) (s=G:GPS,R:GLO,E:GAL,J:QZS,C:BDS,I:IRN) [G|R]
+ -f freq         number of frequencies for relative mode
+                 (1:L1,2:L1+L2,3:L1+L2+L5) [2]
+ -v thres        validation threshold for integer ambiguity (0.0:no AR) [3.0]
+ -b              backward solutions [off]
+ -c              forward/backward combined solutions [off]
+ -i              instantaneous integer ambiguity resolution [off]
+ -h              fix and hold for integer ambiguity resolution [off]
+ -e              output x/y/z-ecef position [latitude/longitude/height]
+ -a              output e/n/u-baseline [latitude/longitude/height]
+ -n              output NMEA-0183 GGA sentence [off]
+ -g              output latitude/longitude in the form of ddd mm ss.ss' 
+                 [ddd.ddd]
+ -t              output time in the form of yyyy/mm/dd hh:mm:ss.ss [sssss.ss]
+ -u              output time in utc [gpst]
+ -d col          number of decimals in time [3]
+ -s sep          field separator [' ']
+ -r x y z        reference (base) receiver ecef pos (m)
+                 [average of single pos]
+                 rover receiver ecef pos (m) for fixed or ppp-fixed mode
+ -l lat lon hgt  reference (base) receiver latitude/longitude/height (deg/m)
+                 rover latitude/longitude/height for fixed or ppp-fixed mode
+ -ign_chierr     ignore chi-square error mode [off]
+ -sta staname    station name[RINEX MARKER NAME]
+ -sbfatt attfile septentrio ASCII GNSS attitude(AttEuler) file name
+ -sbfimu imufile septentrio ASCII IMU sensor(ExtSensorMeas) file name
+ -ubxins ubxfile u-blox F9 high precision sensor fusion GNSS file name
+ -subssr ssrfile substitute PPP correction SSR file name
+ -y level        output soltion status (0:off,1:states,2:residuals) [0]
+ -x level        debug trace level (0:off) [0]
+ -opkf level     output PPP kalman filter state/covariance
+                 (0:off,1:states,2:states+dcov,3:states+dcov+ccov) [0]
+ -ver            print version
 ```
 
 Example
@@ -301,6 +356,21 @@ make
 ./rnxrtkp
 ```
 </details>
+
+## Test Data
+### Static GNSS data
+- Receiver : Trimble NetR9 Bundle
+- Sampling Rate : 1Hz
+- GNSS Constellations : GPS, GLONASS, Galileo, QZSS, BeiDou (GREJC) 
+- Frequencies : Triple-frequency (BDS:dual-frequency)
+- Antenna / radome : SEPCHOKE_B3E6 / SPKE
+
+The rnx2rtkp dataset can be downloaded from the following website:
+ftp://mgmds01.tksc.jaxa.jp/data/sample/MALIB_OSS_rnx2rtkp_dataset.tar.gz
+### Reference
+| lat     | lon     | hight      |
+|:-----------|:------------|:------------|
+|36.070584997|140.127393622    | 66.9014 |
 
 ## Contributor
 Tomoji Takasu\
@@ -318,49 +388,156 @@ navigation satellite system).[RTKLIB manual](https://www.rtklib.com/prog/manual_
 ```shell
 .
 ├── LICENSE.txt
-├── app
-│   └── consapp
-│       ├── rnx2rtkp
-│       │   ├── gcc
-│       │   │   └── makefile
-│       │   ├── gcc_mkl
-│       │   │   └── makefile
-│       │   └── rnx2rtkp.c
-│       └── rtkrcv
-│           ├── gcc
-│           │   └── makefile
-│           ├── gcc_mkl
-│           │   └── makefile
-│           ├── rtkrcv.c
-│           ├── vt.c
-│           └── vt.h
-├── bin
-│   ├── rnx2rtkp.conf
-│   └── rtkrcv.conf
-├── data
+├── app/
+│  ├── consapp/
+│  │   ├── makefile
+│  │   ├── instrans
+│  │   │   └── instrans
+│  │   ├── lclcmbpp/
+│  │   │   ├── lclcmbpp.c
+│  │   │   └── gcc/
+│  │   │       └── makefile
+│  │   ├── lclcmbrt/
+│  │   │   ├── lclcmbrt.c
+│  │   │   └── gcc/
+│  │   │        └── makefile
+│  │   ├── recvbias/
+│  │   │   ├── recvbias.c
+│  │   │   └── gcc/
+│  │   │       └── makefile
+│  │   ├── rnx2rtkp/
+│  │   │   ├── rnx2rtkp.c
+│  │   │   ├── gcc/
+│  │   │   │   └── makefile
+│  │   │   └── gcc_mkl/
+│  │   │       └── makefile
+│  │   └── rtkrcv/
+│  │       ├── rtkrcv.c
+│  │       ├── vt.c
+│  │       ├── vt.h
+│  │       ├── gcc/
+│  │       │   └── makefile
+│  │       └── gcc_mkl/
+│  │           └── makefile
+│  └─qtapp/
+│      ├── BASELIB_ISSUES.md
+│      ├── BUILD.md
+│      ├── CMakeLists.txt
+│      ├── NOTICE.txt
+│      ├── PORTING_NOTES.md
+│      ├── appcmn_qt/
+│      │   ├── cmdoptdlg.cpp
+│      │   ├── cmdoptdlg.h
+│      │   ├── ftpoptdlg.cpp
+│      │   ├── ftpoptdlg.h
+│      │   ├── graph.cpp
+│      │   ├── graph.h
+│      │   ├── refdlg.cpp
+│      │   ├── refdlg.h
+│      │   ├── serioptdlg.cpp
+│      │   ├── serioptdlg.h
+│      │   ├── tcpoptdlg.cpp
+│      │   ├── tcpoptdlg.h
+│      │   └── textconv.h
+│      ├── license/
+│      │   ├── LICENSE.GPLv3.txt
+│      │   └── LICENSE.LGPLv3.txt
+│      ├── rtknavi_qt/
+│      │   ├── appstyle.h
+│      │   ├── basefix.h
+│      │   ├── instrdlg.cpp
+│      │   ├── instrdlg.h
+│      │   ├── main.cpp
+│      │   ├── maincli.cpp
+│      │   ├── mondlg.cpp
+│      │   ├── mondlg.h
+│      │   ├── navimain.cpp
+│      │   ├── navimain.h
+│      │   ├── optdlg.cpp
+│      │   ├── optdlg.h
+│      │   ├── outstrdlg.cpp
+│      │   ├── outstrdlg.h
+│      │   ├── plotpanel.cpp
+│      │   ├── plotpanel.h
+│      │   ├── snrwdlg.cpp
+│      │   └── snrwdlg.h
+│      ├── rtkplot_qt/
+│      │   ├── conndlg.cpp
+│      │   ├── conndlg.h
+│      │   ├── main.cpp
+│      │   ├── plotdata.cpp
+│      │   ├── plotdata.h
+│      │   ├── plotmain.cpp
+│      │   ├── plotmain.h
+│      │   ├── plotopt.cpp
+│      │   ├── plotopt.h
+│      │   ├── plotwidget.cpp
+│      │   └── plotwidget.h
+│      ├── spike/
+│      │   └── main.cpp
+│      └── tools/
+│          ├── cmp_pos.py
+│          ├── deploy_win.sh
+│          ├── gen_testlist.py
+│          └── README.md
+├── winapp/
+│      ├── libgcc_s_seh-1.dll
+│      ├── libstdc++-6.dll
+│      ├── libwinpthread-1.dll
+│      ├── Qt6Core.dll
+│      ├── Qt6Gui.dll
+│      ├── Qt6Network.dll
+│      ├── Qt6Svg.dll
+│      ├── Qt6Widgets.dll
+│      ├── rtknavi_cli.exe
+│      ├── rtknavi_qt.exe
+│      ├── rtkplot_qt.exe
+│      ├── generic/
+│      │   └── qtuiotouchplugin.dll
+│      ├── iconengines/
+│      │   └── qsvgicon.dll
+│      ├── imageformats/
+│      │   ├── qgif.dll
+│      │   ├── qico.dll
+│      │   ├── qjpeg.dll
+│      │   └── qsvg.dll
+│      ├── networkinformation/
+│      │   └── qnetworklistmanager.dll
+│      ├── platforms/
+│      │   └── qwindows.dll
+│      ├── styles/
+│      │   └── qmodernwindowsstyle.dll
+│      └── tls/
+│          ├── qcertonlybackend.dll
+│          └── qschannelbackend.dll
+├── bin/
+│   ├── lclcmb_gridfile_sample.txt
+│   ├── lclcmb_stafile_sample.txt
+│   ├── lclcmbrt_stset_sample.conf
+│   ├── rnx2rtkp_sample.conf
+│   └── rtkrcv_sample.conf
+├── data/
+│   └── igs20_2423.atx
 │   └── MALIB_OSS_data.tar.gz
-├── doc
-│   ├── doc
-│   │   ├── manual.docx
-│   │   ├── relnote_2.4.1.htm
-│   │   ├── relnotes_2.2.1.txt
-│   │   ├── relnotes_2.2.2.txt
-│   │   ├── relnotes_2.3.0.txt
-│   │   └── relnotes_2.4.0.doc
-│   ├── manual_2.4.2.pdf
-│   ├── manual_MALIB1.0.0.pdf
-│   └── relnote_2.4.2.htm
-├── lib
-│   └── mkl
+│   └── MALIB_OSS_rtkrcv_dataset.tar.gz
+├── doc/
+│   └── manual_MALIB1.3.0.pdf
+├── lib/
+│   └── mkl/
 │       ├── readme.txt
 │       └── redist.txt
 ├── readme.md
-└── src
+└── src/
+    ├── biassnx.c
     ├── ephemeris.c
     ├── geoid.c
+    ├── inscmn.c
     ├── ionex.c
     ├── lambda.c
+    ├── lclcmbcmn.c
+    ├── lclcmn.c
     ├── mdccssr.c
+    ├── mdciono.c
     ├── options.c
     ├── pntpos.c
     ├── postpos.c
@@ -368,7 +545,8 @@ navigation satellite system).[RTKLIB manual](https://www.rtklib.com/prog/manual_
     ├── ppp_ar.c
     ├── ppp_corr.c
     ├── preceph.c
-    ├── rcv
+    ├── qzssl6.c
+    ├── rcv/
     │   ├── binex.c
     │   ├── crescent.c
     │   ├── javad.c
@@ -385,10 +563,12 @@ navigation satellite system).[RTKLIB manual](https://www.rtklib.com/prog/manual_
     ├── rtcm2.c
     ├── rtcm3.c
     ├── rtcm3e.c
+    ├── rtcm3lcl.c
     ├── rtkcmn.c
     ├── rtklib.h
     ├── rtkpos.c
     ├── rtksvr.c
+    ├── satqual.c
     ├── sbas.c
     ├── solution.c
     ├── stream.c
@@ -398,14 +578,43 @@ navigation satellite system).[RTKLIB manual](https://www.rtklib.com/prog/manual_
 
 ## UPDATE HISTORY
 | Date       | version     | feature      |
-|:-----------|------------:|:------------:|
+|:-----------|------------:|:------------|
 | 2024/09/27 | 1.0.0       | first trail version MALIB |
 | 2025/02/28 | 1.1.0       | Add single-station atmospheric delay correction|
 |            |             | Delete unused files |
-| TBD  |  TBD    | TBD            |
-|
+| 2025/10/27 | 1.2.0_pre   | Pre-release version for upcoming v1.2.0|
+|            |             | Added support for BeiDou Navigation Satellite System (B1C-B2, B1C-B3I (post-processing only))|
+|            |             | Added support for QZSS L1C/B and Galileo E5b signal selection|
+|            |             | Added support for the new MADOCA-PPP format (IS-QZSS-MDC-004)|
+|            |             | Added support for RINEX ver. 4.00 and ver. 4.01|
+|            |             | Added support for the OSB (Observable Specific Bias) product format|
+|            |             | Fixed some bags|
+| 2026/10/23 | 1.3.0       | Added support for L6E substitute PPP option
+|            |             | Added support for L6D wide-area ionospheric correction information
+|            |             | Added support for BDS-2 and BDS-3
+|            |             | Added support for triple/quad-frequency PPP and PPP-AR
+|            |             | Added support for Phase Bias in BIAS-SINEX
+|            |             | Added support for septentrio/u-blox INS data
+|            |             | Added support for tightly coupled PPP/INS integration
+|            |             | Added support for NLOS observation exclusion
+|            |             | Change priority of utilized signals
+|            |             | Updated handling of PCO/PCV for multi-GNSS and multi-frequency
+|            |             | Other fixes to bugs, log levels, and comments
+|            |             | Added RTKNAVI and RTKPLOT to the Windows app
+
 
 ## FAQ
 TBD...
 
 ## Annotation
+To ensure optimal performance, we recommend the following system configuration
+
+#### Operating System : Ubuntu 20.04
+The software is primarily developed and tested on native Ubuntu 20.04 environments. \
+However, it can also run on Windows environments via WSL (Windows Subsystem for Linux)
+using Ubuntu.
+
+## Waring
+Using L6E versions released on or after July 2, 2026 with the `feature/1.2.0` branch will cause the application to terminate unexpectedly. \
+This issue occurs because BeiDou support has not been implemented. \
+Please use `main(ver.1.3.0)` branch instead.

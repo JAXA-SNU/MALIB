@@ -14,7 +14,6 @@
 *     [3] RTCM Recommendaed Standards for Networked Transport for RTCM via
 *         Internet Protocol (Ntrip), Version 2.0, June 28, 2011
 *
-* version : $Revision:$ $Date:$
 * history : 2009/01/16 1.0  new
 *           2009/04/02 1.1  support nmea request in ntrip request
 *                           support time-tag of file as stream
@@ -332,7 +331,7 @@ static DWORD WINAPI serialthread(void *arg)
     
     tracet(3,"serialthread:\n");
     
-    for (;;) {
+    while(1) {
         tick=tickget();
         while ((n=readseribuff(serial,buff,sizeof(buff)))>0) {
             if (!WriteFile(serial->dev,buff,n,&ns,NULL)) serial->error=1;
@@ -3256,7 +3255,7 @@ extern void strsendcmd(stream_t *str, const char *cmd)
     
     tracet(3,"strsendcmd: cmd=%s\n",cmd);
     
-    for (;;) {
+    while(1) {
         for (q=p;;q++) if (*q=='\r'||*q=='\n'||*q=='\0') break;
         n=(int)(q-p); strncpy(msg,p,n); msg[n]='\0';
         

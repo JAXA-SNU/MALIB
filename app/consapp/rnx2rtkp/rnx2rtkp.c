@@ -1,9 +1,9 @@
 /*------------------------------------------------------------------------------
 * rnx2rtkp.c : read rinex obs/nav files and compute receiver positions
 *
-*          Copyright (C) 2007-2023 by T.TAKASU, All rights reserved.
+* Copyright (C) 2024-2025 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2007-2023 by T.TAKASU, All rights reserved.
 *
-* version : $Revision: 1.1 $ $Date: 2008/07/17 21:55:16 $
 * history : 2007/01/16  1.0 new
 *           2007/03/15  1.1 add library mode
 *           2007/05/08  1.2 separate from postpos.c
@@ -21,11 +21,15 @@
 *           2024/02/01  1.13 branch from ver.2.4.3b35 for MALIB
 *                            add option -ign_chierr
 *           2024/08/02  1.14 change initial value of glomodear
+*           2024/09/26  1.15 update version info
+*           2024/12/20  1.16 add option -sta
+*           2025/03/24  1.17 add option -sbfatt, -sbfimu
+*           2025/12/26  1.18 update help message
+*                            add option -ubxins,-subssr,-opkf
 *-----------------------------------------------------------------------------*/
 #include <stdarg.h>
 #include "rtklib.h"
 
-#define PROGNAME    "rnx2rtkp"          /* program name */
 #define MAXFILE     16                  /* max number of input files */
 
 /* help text -----------------------------------------------------------------*/
@@ -33,51 +37,63 @@ static const char *help[]={
 "",
 " usage: rnx2rtkp [option]... file file [...]",
 "",
-" Read RINEX OBS/NAV/GNAV/HNAV/CLK, SP3, SBAS message log files and ccompute ",
-" receiver (rover) positions and output position solutions.",
-" The first RINEX OBS file shall contain receiver (rover) observations. For the",
-" relative mode, the second RINEX OBS file shall contain reference",
+" Read RINEX OBS/NAV/GNAV/HNAV/CLK, SP3, SBAS message log, RTCM3, L6(MADOCA-PPP)",
+" files and ccompute receiver (rover) positions and output position solutions.",
+" The first RINEX OBS file shall contain receiver (rover) observations.",
+" For the relative mode, the second RINEX OBS file shall contain reference",
 " (base station) receiver observations. At least one RINEX NAV/GNAV/HNAV",
 " file shall be included in input files. To use SP3 precise ephemeris, specify",
 " the path in the files. The extension of the SP3 file shall be .sp3 or .eph.",
-" All of the input file paths can include wild-cards (*). To avoid command",
-" line deployment of wild-cards, use \"...\" for paths with wild-cards.",
-" Command line options are as follows ([]:default). With -k option, the",
-" processing options are input from the configuration file. In this case,",
-" command line options precede options in the configuration file.",
+" L6 (MADOCA-PPP) files support clock/ephemeris corrections and ionospheric ",
+" Multiple ionospheric correction files can be specified as input.",
+" corrections. All of the input file paths can include wild-cards (*).",
+" To avoid command line deployment of wild-cards, use \"...\" for paths ",
+" with wild-cards. Command line options are as follows ([]:default).",
+" With -k option, the processing options are input from the configuration file.",
+"  In this case, command line options precede options in the configuration file.",
 "",
-" -?        print help",
-" -k file   input options from configuration file [off]",
-" -o file   set output file [stdout]",
-" -ts ds ts start day/time (ds=y/m/d ts=h:m:s) [obs start time]",
-" -te de te end day/time   (de=y/m/d te=h:m:s) [obs end time]",
-" -ti tint  time interval (sec) [all]",
-" -p mode   mode (0:single,1:dgps,2:kinematic,3:static,4:moving-base,",
-"                 5:fixed,6:ppp-kinematic,7:ppp-static) [2]",
-" -m mask   elevation mask angle (deg) [15]",
-" -sys s[,s...] nav system(s) (s=G:GPS,R:GLO,E:GAL,J:QZS,C:BDS,I:IRN) [G|R]",
-" -f freq   number of frequencies for relative mode (1:L1,2:L1+L2,3:L1+L2+L5) [2]",
-" -v thres  validation threshold for integer ambiguity (0.0:no AR) [3.0]",
-" -b        backward solutions [off]",
-" -c        forward/backward combined solutions [off]",
-" -i        instantaneous integer ambiguity resolution [off]",
-" -h        fix and hold for integer ambiguity resolution [off]",
-" -e        output x/y/z-ecef position [latitude/longitude/height]",
-" -a        output e/n/u-baseline [latitude/longitude/height]",
-" -n        output NMEA-0183 GGA sentence [off]",
-" -g        output latitude/longitude in the form of ddd mm ss.ss' [ddd.ddd]",
-" -t        output time in the form of yyyy/mm/dd hh:mm:ss.ss [sssss.ss]",
-" -u        output time in utc [gpst]",
-" -d col    number of decimals in time [3]",
-" -s sep    field separator [' ']",
-" -r x y z  reference (base) receiver ecef pos (m) [average of single pos]",
-"           rover receiver ecef pos (m) for fixed or ppp-fixed mode",
-" -l lat lon hgt reference (base) receiver latitude/longitude/height (deg/m)",
-"           rover latitude/longitude/height for fixed or ppp-fixed mode",
-" -ign_chierr ignore chi-square error mode [off]",
-" -y level  output soltion status (0:off,1:states,2:residuals) [0]",
-" -x level  debug trace level (0:off) [0]",
-" -ver      print version"
+" -?              print help",
+" -k file         input options from configuration file [off]",
+" -o file         set output file [stdout]",
+" -ts ds ts       start day/time (ds=y/m/d ts=h:m:s) [obs start time]",
+" -te de te       end day/time   (de=y/m/d te=h:m:s) [obs end time]",
+" -ti tint        time interval (sec) [all]",
+" -p mode         mode (0:single,1:dgps,2:kinematic,3:static,4:moving-base,",
+"                       5:fixed,6:ppp-kinematic,7:ppp-static) [2]",
+" -m mask         elevation mask angle (deg) [15]",
+" -sys s[,s...]   nav system(s) (s=G:GPS,R:GLO,E:GAL,J:QZS,C:BDS,I:IRN) [G|R]",
+" -f freq         number of frequencies for relative mode",
+"                 (1:L1,2:L1+L2,3:L1+L2+L5) [2]",
+" -v thres        validation threshold for integer ambiguity (0.0:no AR) [3.0]",
+" -b              backward solutions [off]",
+" -c              forward/backward combined solutions [off]",
+" -i              instantaneous integer ambiguity resolution [off]",
+" -h              fix and hold for integer ambiguity resolution [off]",
+" -e              output x/y/z-ecef position [latitude/longitude/height]",
+" -a              output e/n/u-baseline [latitude/longitude/height]",
+" -n              output NMEA-0183 GGA sentence [off]",
+" -g              output latitude/longitude in the form of ddd mm ss.ss' ",
+"                 [ddd.ddd]",
+" -t              output time in the form of yyyy/mm/dd hh:mm:ss.ss [sssss.ss]",
+" -u              output time in utc [gpst]",
+" -d col          number of decimals in time [3]",
+" -s sep          field separator [' ']",
+" -r x y z        reference (base) receiver ecef pos (m)",
+"                 [average of single pos]",
+"                 rover receiver ecef pos (m) for fixed or ppp-fixed mode",
+" -l lat lon hgt  reference (base) receiver latitude/longitude/height (deg/m)",
+"                 rover latitude/longitude/height for fixed or ppp-fixed mode",
+" -ign_chierr     ignore chi-square error mode [off]",
+" -sta staname    station name[RINEX MARKER NAME]",
+" -sbfatt attfile septentrio ASCII GNSS attitude(AttEuler) file name",
+" -sbfimu imufile septentrio ASCII IMU sensor(ExtSensorMeas) file name",
+" -ubxins ubxfile u-blox F9 high precision sensor fusion GNSS file name",
+" -subssr ssrfile substitute PPP correction SSR file name",
+" -y level        output soltion status (0:off,1:states,2:residuals) [0]",
+" -x level        debug trace level (0:off) [0]",
+" -opkf level     output PPP kalman filter state/covariance",
+"                 (0:off,1:states,2:states+dcov,3:states+dcov+ccov) [0]",
+" -ver            print version",
 };
 /* show message --------------------------------------------------------------*/
 extern int showmsg(const char *format, ...)
@@ -100,7 +116,7 @@ static void printhelp(void)
 /* print version -------------------------------------------------------------*/
 static void printver(void)
 {
-    fprintf(stderr,"%s ver.%s %s\n",PROGNAME,VER_MALIB,PATCH_LEVEL_MALIB);
+    fprintf(stderr,"%s(%s ver.%s %s)\n",PROGNAME,SOFTNAME,VER_MALIB,PATCH_LEVEL_MALIB);
     exit(0);
 }
 /* rnx2rtkp main -------------------------------------------------------------*/
@@ -110,7 +126,7 @@ int main(int argc, char **argv)
     solopt_t solopt=solopt_default;
     filopt_t filopt={""};
     gtime_t ts={0},te={0};
-    double tint=0.0,es[]={2000,1,1,0,0,0},ee[]={2000,12,31,23,59,59},pos[3];
+    double es[]={2000,1,1,0,0,0},ee[]={2000,12,31,23,59,59},pos[3];
     int i,j,n,ret;
     char *infile[MAXFILE],*outfile="",*p;
     
@@ -119,7 +135,7 @@ int main(int argc, char **argv)
     prcopt.refpos=1;
     prcopt.glomodear=0;
     solopt.timef=0;
-    sprintf(solopt.prog ,"%s ver.%s %s",PROGNAME,VER_MALIB,PATCH_LEVEL_MALIB);
+    sprintf(solopt.prog ,"%s(%s ver.%s %s)",PROGNAME,SOFTNAME,VER_MALIB,PATCH_LEVEL_MALIB);
     sprintf(filopt.trace,"%s.trace",PROGNAME);
     
     /* load options from configuration file */
@@ -142,11 +158,12 @@ int main(int argc, char **argv)
             sscanf(argv[++i],"%lf:%lf:%lf",ee+3,ee+4,ee+5);
             te=epoch2time(ee);
         }
-        else if (!strcmp(argv[i],"-ti")&&i+1<argc) tint=atof(argv[++i]);
+        else if (!strcmp(argv[i],"-ti")&&i+1<argc) prcopt.tint=atof(argv[++i]);
         else if (!strcmp(argv[i],"-k")&&i+1<argc) {++i; continue;}
         else if (!strcmp(argv[i],"-p")&&i+1<argc) prcopt.mode=atoi(argv[++i]);
         else if (!strcmp(argv[i],"-f")&&i+1<argc) prcopt.nf=atoi(argv[++i]);
         else if (!strcmp(argv[i],"-sys")&&i+1<argc) {
+            prcopt.navsys=SYS_NONE;
             for (p=argv[++i];*p;p++) {
                 switch (*p) {
                     case 'G': prcopt.navsys|=SYS_GPS; break;
@@ -186,9 +203,15 @@ int main(int argc, char **argv)
             matcpy(prcopt.ru,prcopt.rb,3,1);
         }
         else if (!strcmp(argv[i],"-ign_chierr")) prcopt.ign_chierr = 1;
+        else if (!strcmp(argv[i],"-sta")&&i+1<argc) strcpy(prcopt.staname,argv[++i]);
+        else if (!strcmp(argv[i],"-sbfatt")&&i+1<argc) strcpy(prcopt.attfile,argv[++i]);
+        else if (!strcmp(argv[i],"-sbfimu")&&i+1<argc) strcpy(prcopt.imufile,argv[++i]);
+        else if (!strcmp(argv[i],"-subssr")&&i+1<argc) strcpy(filopt.subssr,argv[++i]);
+        else if (!strcmp(argv[i],"-opkf")&&i+1<argc) prcopt.pppkf=atoi(argv[++i]);
         else if (!strcmp(argv[i],"-y")&&i+1<argc) solopt.sstat=atoi(argv[++i]);
         else if (!strcmp(argv[i],"-x")&&i+1<argc) solopt.trace=atoi(argv[++i]);
         else if (!strcmp(argv[i],"-ver")) printver();
+        else if (!strcmp(argv[i],"-ubxins")&&i+1<argc) strcpy(prcopt.ubxinsfile,argv[++i]);
         else if (*argv[i]=='-') printhelp();
         else if (n<MAXFILE) infile[n++]=argv[i];
     }
@@ -199,7 +222,7 @@ int main(int argc, char **argv)
         showmsg("error : no input file");
         return -2;
     }
-    ret=postpos(ts,te,tint,0.0,&prcopt,&solopt,&filopt,infile,n,outfile,"","");
+    ret=postpos(ts,te,prcopt.tint,0.0,&prcopt,&solopt,&filopt,infile,n,outfile,"","");
     
     if (!ret) fprintf(stderr,"%40s\r","");
     return ret;

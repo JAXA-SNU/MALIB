@@ -7,8 +7,8 @@ as they comply with the license.
 --------------------------------------------------------------------------------
 
          Copyright (c) 2007-2023, T. Takasu, All rights reserved.
-         Copyright (c) 2023-2024, Japan Aerospace Exploration Agency. All Rights Reserved.
-         Copyright (C) 2023-2024, TOSHIBA ELECTRONIC TECHNOLOGIES CORPORATION. All Rights Reserved.
+         Copyright (c) 2023-2026, Japan Aerospace Exploration Agency. All Rights Reserved.
+         Copyright (C) 2023-2026, TOSHIBA ELECTRONIC TECHNOLOGIES CORPORATION. All Rights Reserved.
 
 Redistribution and use in source and binary forms, with or without modification,
 are permitted provided that the following conditions are met:

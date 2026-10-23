@@ -9,7 +9,6 @@
 *     [2] Trimble, Trimble OEM BD9xx GNSS Receiver Family IDC, version 4.82
 *         Revision A, December, 2013
 *
-* version : $Revision:$ $Date:$
 * history : 2014/08/26 1.0  imported from GitHub (ref [1])
 *                           modified to get initial week number
 *                           modified obs types for raw obs data
@@ -472,7 +471,7 @@ void free_rt17(raw_t *Raw)
 /* init_rt17 = Initialize RT17 dependent private storage */
 int init_rt17(raw_t *Raw)
 {
-	rt17_t *rt17 = NULL;
+    rt17_t *rt17 = NULL;
     uint8_t *MessageBuffer = NULL, *PacketBuffer = NULL;
 
     if (Raw->format != STRFMT_RT17)
@@ -733,8 +732,8 @@ int input_rt17f(raw_t *Raw, FILE *fp)
     
     for (i = 0; i < 4096; i++)
     {
-	if ((Data = fgetc(fp)) == EOF) return -2;
-	    if ((Ret = input_rt17(Raw, (uint8_t) Data))) return Ret;
+    if ((Data = fgetc(fp)) == EOF) return -2;
+        if ((Ret = input_rt17(Raw, (uint8_t) Data))) return Ret;
     }
 
     return 0; /* return at every 4k bytes */

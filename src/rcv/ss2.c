@@ -6,7 +6,6 @@
 * reference:
 *     [1] NovAtel, OM-20000086 Superstar II Firmware Reference Manual, 2005
 *
-* version : $Revision: 1.2 $ $Date: 2008/07/14 00:05:05 $
 * history : 2008/05/18 1.0 new
 *           2008/06/16 1.2 separate common functions to rcvcmn.c
 *           2009/04/01 1.3 fix bug on decode #21 message
@@ -57,7 +56,7 @@ static int adjweek(raw_t *raw, double sec)
 /* decode id#20 navigation data (user) ---------------------------------------*/
 static int decode_ss2llh(raw_t *raw)
 {
-	double ep[6];
+    double ep[6];
     uint8_t *p=raw->buff+4;
     
     trace(4,"decode_ss2llh: len=%d\n",raw->len);

@@ -7,7 +7,6 @@
 *     [1] EGM96 The NASA GSFC and NIMA Joint Geopotential Model
 *     [2] Earth Gravitational Model 2008 (EGM2008)
 *
-* version : $Revision: 1.1 $ $Date: 2008/07/17 21:48:06 $
 * history : 2007/01/07 1.0  new
 *           2009/09/04 1.1  replace geoid data by global model
 *           2009/12/05 1.2  added api:

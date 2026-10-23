@@ -1,9 +1,9 @@
 /*------------------------------------------------------------------------------
 * options.c : options functions
 *
-*          Copyright (C) 2010-2021 by T.TAKASU, All rights reserved.
+* Copyright (C) 2024-2026 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2010-2021 by T.TAKASU, All rights reserved.
 *
-* version : $Revision:$ $Date:$
 * history : 2010/07/20  1.1  moved from postpos.c
 *                            added api:
 *                                searchopt(),str2opt(),opt2str(),opt2buf(),
@@ -31,6 +31,29 @@
 *           2021/05/07  1.14 add file-elmaskfile
 *           2024/02/01  1.15 branch from ver.2.4.3b35 for MALIB
 *                            add pos2-arsys,pos2-ign_chierr
+*           2024/12/20  1.16 add pos2-sigbds3,pos2-bds2bias,pos2-pppsatcb,
+*                             pos2-pppsatpb,pos2-uncorrbias,pos2-maxbiasdt,
+*                             file-fcbfile,file-biafile
+*           2025/03/24  1.17 change options pos1-dynamics
+*                            add pos2-clkopt,pos2-clkdopt,pos2-tint,
+*                             pos2-insint,stats-uraratio,stats-stdatt,
+*                             stats-stdvel,stats-stdpos,stats-stdaccb,
+*                             stats-stdgyrob,stats-stdclko,stats-stdclkd,
+*                             stats-prnclkd,stats-prnclk_gps,stats-prnclk_glo,
+*                             stats-prnclk_gal,stats-prnclk_bds,stats-prnclk_irn,
+*                             stats-prnclk_qzs,stats-prnaccn,stats-prngyron,
+*                             stats-prnaccb,stats-prngyrob,stats-clkjump,
+*                             ant2-antimux,ant2-antimuy,ant2-antimuz,
+*                             ant2-rotimux,ant2-rotimuy,ant2-rotimuz
+*           2025/12/26  1.18 add options pos1-subopt,pos1-drint,pos2-ionocorr,
+*                             pos2-insreset,pos2-maxdist,file-pppkf,
+*                             pos1-snrwthre_*,pos1-snrwmargin_*,pos1-snrweratio_*
+*           2026/02/27  1.19 add options pos2-car,pos2-carthres1,pos2-carthres2,
+*                             stats-prnifb,pos2-sigqzs2A,pos2-sigqzs3,
+*                              pos2-sigbds2,stats-prnclk_bds2
+*                            change options pos1-snrwthre 
+*                            add option format 4 for pos1-snrwthre
+*                            modify pos2-pppsatpb 2:N/A -> bia
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
@@ -64,145 +87,226 @@ static char snrmask_[NFREQ][1024];
 #define STSOPT  "0:off,1:state,2:residual"
 #define ARMOPT  "0:off,1:continuous,2:instantaneous,3:fix-and-hold"
 #define POSOPT  "0:llh,1:xyz,2:single,3:posfile,4:rinexhead,5:rtcm,6:raw"
+#define SUBOPT  "0:off,1:brdc,4:rt"
 #define TIDEOPT "0:off,1:on,2:otl"
 #define PHWOPT  "0:off,1:on,2:precise"
-#define SIGOPT1 "0:L1C/A-L2P,1:L1C/A-L2C"
-#define SIGOPT2 "0:L1C/A-L2P,1:L1C/A-L2C,2:L1C/A-L5"
-#define SIGOPT3 "0:L1C-L5,1:L1C/A-L2C"
-#define SIGOPT4 "0:E1C-E5a,1:E1C-E5b"
+#define SIGOPT1 "0:L1C/A-L2P,1:L1C/A-L2C,3:L1C/A-L2"
+#define SIGOPT2 "0:L1C/A-L2P,1:L1C/A-L2C,2:L1C/A-L5,3:L1C/A-L2,4:L1C/A-L2P-L5,5:L1C/A-L2C-L5"
+#define SIGOPT3 "0:E1-E5a,1:E1-E5b,2:E1-E5a-E5b,3:E1-E5a-E5b-E6"
+#define SIGOPT4 "0:L1C-L5,1:L1C/A-L2C,3:L1C-L5-L2C,4:L1C/A-L2C-L5"
+#define SIGOPT5 "0:L1C-L5,1:L1C/A-L2C,2:L1C/B-L5,3:L1C-L5-L2C,4:L1C/A-L2C-L5,5:L1C/B-L2C-L5"
+#define SIGOPT6 "0:L1C-L5,2:L1C/B-L5"
+#define SIGOPT7 "0:B1I-B3I,1:B1I-B2I,2:B1I-B3I-B2I"
+#define SIGOPT8 "0:B1I-B3I,1:B1I-B2a,2:B1I-B3I-B2a,9:B1C-B2a"
+#define SATCB   "0:auto,1:l6e,2:bia,3:dcb,4:rtcm3"
+#define SATPB   "0:auto,1:l6e,2:bia,3:fcb,4:rtcm3"
+#define DYOPT   "0:off,1:dynamics,2:ins"
+#define UNCORRB "0:use,1:notuse,2:notuse-uncorrsatbias"
 
 opt_t sysopts[]={
-    {"pos1-posmode",    3,  (void *)&prcopt_.mode,       MODOPT },
-    {"pos1-frequency",  3,  (void *)&prcopt_.nf,         FRQOPT },
-    {"pos1-soltype",    3,  (void *)&prcopt_.soltype,    TYPOPT },
-    {"pos1-elmask",     1,  (void *)&elmask_,            "deg"  },
-    {"pos1-snrmask_r",  3,  (void *)&prcopt_.snrmask.ena[0],SWTOPT},
-    {"pos1-snrmask_b",  3,  (void *)&prcopt_.snrmask.ena[1],SWTOPT},
-    {"pos1-snrmask_L1", 2,  (void *)snrmask_[0],         ""     },
-    {"pos1-snrmask_L2", 2,  (void *)snrmask_[1],         ""     },
-    {"pos1-snrmask_L5", 2,  (void *)snrmask_[2],         ""     },
-    {"pos1-dynamics",   3,  (void *)&prcopt_.dynamics,   SWTOPT },
-    {"pos1-tidecorr",   3,  (void *)&prcopt_.tidecorr,   TIDEOPT},
-    {"pos1-ionoopt",    3,  (void *)&prcopt_.ionoopt,    IONOPT },
-    {"pos1-tropopt",    3,  (void *)&prcopt_.tropopt,    TRPOPT },
-    {"pos1-sateph",     3,  (void *)&prcopt_.sateph,     EPHOPT },
-    {"pos1-posopt1",    3,  (void *)&prcopt_.posopt[0],  SWTOPT },
-    {"pos1-posopt2",    3,  (void *)&prcopt_.posopt[1],  SWTOPT },
-    {"pos1-posopt3",    3,  (void *)&prcopt_.posopt[2],  PHWOPT },
-    {"pos1-posopt4",    3,  (void *)&prcopt_.posopt[3],  SWTOPT },
-    {"pos1-posopt5",    3,  (void *)&prcopt_.posopt[4],  SWTOPT },
-    {"pos1-posopt6",    3,  (void *)&prcopt_.posopt[5],  SWTOPT },
-    {"pos1-exclsats",   2,  (void *)exsats_,             "prn ..."},
-    {"pos1-navsys",     0,  (void *)&prcopt_.navsys,     NAVOPT },
+    {"pos1-posmode",         3, (void *)&prcopt_.mode,           MODOPT      },
+    {"pos1-frequency",       3, (void *)&prcopt_.nf,             FRQOPT      },
+    {"pos1-soltype",         3, (void *)&prcopt_.soltype,        TYPOPT      },
+    {"pos1-elmask",          1, (void *)&elmask_,                "deg"       },
+    {"pos1-snrmask_r",       3, (void *)&prcopt_.snrmask.ena[0], SWTOPT      },
+    {"pos1-snrmask_b",       3, (void *)&prcopt_.snrmask.ena[1], SWTOPT      },
+    {"pos1-snrmask_L1",      2, (void *)snrmask_[0],             ""          },
+    {"pos1-snrmask_L2",      2, (void *)snrmask_[1],             ""          },
+    {"pos1-snrmask_L5",      2, (void *)snrmask_[2],             ""          },
+    {"pos1-dynamics",        3, (void *)&prcopt_.dynamics,       DYOPT       },
+    {"pos1-subopt",          3, (void *)&prcopt_.subopt,         SUBOPT      },
+    {"pos1-drint",           1, (void *)&prcopt_.drint,          ""          },
+    {"pos1-tidecorr",        3, (void *)&prcopt_.tidecorr,       TIDEOPT     },
+    {"pos1-ionoopt",         3, (void *)&prcopt_.ionoopt,        IONOPT      },
+    {"pos1-tropopt",         3, (void *)&prcopt_.tropopt,        TRPOPT      },
+    {"pos1-sateph",          3, (void *)&prcopt_.sateph,         EPHOPT      },
+    {"pos1-posopt1",         3, (void *)&prcopt_.posopt[0],      SWTOPT      },
+    {"pos1-posopt2",         3, (void *)&prcopt_.posopt[1],      SWTOPT      },
+    {"pos1-posopt3",         3, (void *)&prcopt_.posopt[2],      PHWOPT      },
+    {"pos1-posopt4",         3, (void *)&prcopt_.posopt[3],      SWTOPT      },
+    {"pos1-posopt5",         3, (void *)&prcopt_.posopt[4],      SWTOPT      },
+    {"pos1-posopt6",         3, (void *)&prcopt_.posopt[5],      SWTOPT      },
+    {"pos1-exclsats",        2, (void *)exsats_,                 "prn ..."   },
+    {"pos1-navsys",          0, (void *)&prcopt_.navsys,         NAVOPT      },
     
-    {"pos2-armode",     3,  (void *)&prcopt_.modear,     ARMOPT },
-    {"pos2-gloarmode",  3,  (void *)&prcopt_.glomodear,  GAROPT },
-    {"pos2-bdsarmode",  3,  (void *)&prcopt_.bdsmodear,  SWTOPT },
-    {"pos2-arsys",      0,  (void *)&prcopt_.arsys,      NAVOPT },
-    {"pos2-arthres",    1,  (void *)&prcopt_.thresar[0], ""     },
-    {"pos2-arthres1",   1,  (void *)&prcopt_.thresar[1], ""     },
-    {"pos2-arthres2",   1,  (void *)&prcopt_.thresar[2], ""     },
-    {"pos2-arthres3",   1,  (void *)&prcopt_.thresar[3], ""     },
-    {"pos2-arthres4",   1,  (void *)&prcopt_.thresar[4], ""     },
-    {"pos2-arlockcnt",  0,  (void *)&prcopt_.minlock,    ""     },
-    {"pos2-arelmask",   1,  (void *)&elmaskar_,          "deg"  },
-    {"pos2-arminfix",   0,  (void *)&prcopt_.minfix,     ""     },
-    {"pos2-armaxiter",  0,  (void *)&prcopt_.armaxiter,  ""     },
-    {"pos2-elmaskhold", 1,  (void *)&elmaskhold_,        "deg"  },
-    {"pos2-aroutcnt",   0,  (void *)&prcopt_.maxout,     ""     },
-    {"pos2-maxage",     1,  (void *)&prcopt_.maxtdiff,   "s"    },
-    {"pos2-syncsol",    3,  (void *)&prcopt_.syncsol,    SWTOPT },
-    {"pos2-slipthres",  1,  (void *)&prcopt_.thresslip,  "m"    },
-    {"pos2-rejionno",   1,  (void *)&prcopt_.maxinno,    "m"    },
-    {"pos2-rejgdop",    1,  (void *)&prcopt_.maxgdop,    ""     },
-    {"pos2-niter",      0,  (void *)&prcopt_.niter,      ""     },
-    {"pos2-baselen",    1,  (void *)&prcopt_.baseline[0],"m"    },
-    {"pos2-basesig",    1,  (void *)&prcopt_.baseline[1],"m"    },
-    {"pos2-siggpsIIR-M",0,  (void *)&prcopt_.pppsig[0],  SIGOPT1},
-    {"pos2-siggpsIIF",  0,  (void *)&prcopt_.pppsig[1],  SIGOPT2},
-    {"pos2-siggpsIIIA", 0,  (void *)&prcopt_.pppsig[2],  SIGOPT2},
-    {"pos2-sigqzs1_2",  0,  (void *)&prcopt_.pppsig[3],  SIGOPT3},
-    {"pos2-siggal   ",  0,  (void *)&prcopt_.pppsig[4],  SIGOPT4},
-    {"pos2-ign_chierr", 3,  (void *)&prcopt_.ign_chierr, SWTOPT },
+    {"pos1-snrwthres_gps",   4, (void *)NULL              ,      ""          },
+    {"pos1-snrwthres_glo",   4, (void *)NULL              ,      ""          },
+    {"pos1-snrwthres_gal",   4, (void *)NULL              ,      ""          },
+    {"pos1-snrwthres_qzs",   4, (void *)NULL              ,      ""          },
+    {"pos1-snrwthres_bds",   4, (void *)NULL              ,      ""          },
     
-    {"out-solformat",   3,  (void *)&solopt_.posf,       SOLOPT },
-    {"out-outhead",     3,  (void *)&solopt_.outhead,    SWTOPT },
-    {"out-outopt",      3,  (void *)&solopt_.outopt,     SWTOPT },
-    {"out-outvel",      3,  (void *)&solopt_.outvel,     SWTOPT },
-    {"out-timesys",     3,  (void *)&solopt_.times,      TSYOPT },
-    {"out-timeform",    3,  (void *)&solopt_.timef,      TFTOPT },
-    {"out-timendec",    0,  (void *)&solopt_.timeu,      ""     },
-    {"out-degform",     3,  (void *)&solopt_.degf,       DFTOPT },
-    {"out-fieldsep",    2,  (void *) solopt_.sep,        ""     },
-    {"out-outsingle",   3,  (void *)&prcopt_.outsingle,  SWTOPT },
-    {"out-maxsolstd",   1,  (void *)&solopt_.maxsolstd,  "m"    },
-    {"out-height",      3,  (void *)&solopt_.height,     HGTOPT },
-    {"out-geoid",       3,  (void *)&solopt_.geoid,      GEOOPT },
-    {"out-solstatic",   3,  (void *)&solopt_.solstatic,  STAOPT },
-    {"out-nmeaintv1",   1,  (void *)&solopt_.nmeaintv[0],"s"    },
-    {"out-nmeaintv2",   1,  (void *)&solopt_.nmeaintv[1],"s"    },
-    {"out-outstat",     3,  (void *)&solopt_.sstat,      STSOPT },
-    
-    {"stats-eratio1",   1,  (void *)&prcopt_.eratio[0],  ""     },
-    {"stats-eratio2",   1,  (void *)&prcopt_.eratio[1],  ""     },
-    {"stats-errphase",  1,  (void *)&prcopt_.err[1],     "m"    },
-    {"stats-errphaseel",1,  (void *)&prcopt_.err[2],     "m"    },
-    {"stats-errphasebl",1,  (void *)&prcopt_.err[3],     "m/10km"},
-    {"stats-errdoppler",1,  (void *)&prcopt_.err[4],     "Hz"   },
-    {"stats-stdbias",   1,  (void *)&prcopt_.std[0],     "m"    },
-    {"stats-stdiono",   1,  (void *)&prcopt_.std[1],     "m"    },
-    {"stats-stdtrop",   1,  (void *)&prcopt_.std[2],     "m"    },
-    {"stats-prnaccelh", 1,  (void *)&prcopt_.prn[3],     "m/s^2"},
-    {"stats-prnaccelv", 1,  (void *)&prcopt_.prn[4],     "m/s^2"},
-    {"stats-prnbias",   1,  (void *)&prcopt_.prn[0],     "m"    },
-    {"stats-prniono",   1,  (void *)&prcopt_.prn[1],     "m"    },
-    {"stats-prntrop",   1,  (void *)&prcopt_.prn[2],     "m"    },
-    {"stats-prnpos",    1,  (void *)&prcopt_.prn[5],     "m"    },
-    {"stats-clkstab",   1,  (void *)&prcopt_.sclkstab,   "s/s"  },
-    
-    {"ant1-postype",    3,  (void *)&antpostype_[0],     POSOPT },
-    {"ant1-pos1",       1,  (void *)&antpos_[0][0],      "deg|m"},
-    {"ant1-pos2",       1,  (void *)&antpos_[0][1],      "deg|m"},
-    {"ant1-pos3",       1,  (void *)&antpos_[0][2],      "m|m"  },
-    {"ant1-anttype",    2,  (void *)prcopt_.anttype[0],  ""     },
-    {"ant1-antdele",    1,  (void *)&prcopt_.antdel[0][0],"m"   },
-    {"ant1-antdeln",    1,  (void *)&prcopt_.antdel[0][1],"m"   },
-    {"ant1-antdelu",    1,  (void *)&prcopt_.antdel[0][2],"m"   },
-    
-    {"ant2-postype",    3,  (void *)&antpostype_[1],     POSOPT },
-    {"ant2-pos1",       1,  (void *)&antpos_[1][0],      "deg|m"},
-    {"ant2-pos2",       1,  (void *)&antpos_[1][1],      "deg|m"},
-    {"ant2-pos3",       1,  (void *)&antpos_[1][2],      "m|m"  },
-    {"ant2-anttype",    2,  (void *)prcopt_.anttype[1],  ""     },
-    {"ant2-antdele",    1,  (void *)&prcopt_.antdel[1][0],"m"   },
-    {"ant2-antdeln",    1,  (void *)&prcopt_.antdel[1][1],"m"   },
-    {"ant2-antdelu",    1,  (void *)&prcopt_.antdel[1][2],"m"   },
-    {"ant2-maxaveep",   0,  (void *)&prcopt_.maxaveep    ,""    },
-    {"ant2-initrst",    3,  (void *)&prcopt_.initrst,    SWTOPT },
-    
-    {"misc-timeinterp", 3,  (void *)&prcopt_.intpref,    SWTOPT },
-    {"misc-sbasatsel",  0,  (void *)&prcopt_.sbassatsel, "0:all"},
-    {"misc-rnxopt1",    2,  (void *)prcopt_.rnxopt[0],   ""     },
-    {"misc-rnxopt2",    2,  (void *)prcopt_.rnxopt[1],   ""     },
-    {"misc-pppopt",     2,  (void *)prcopt_.pppopt,      ""     },
-    {"misc-rtcmopt",    2,  (void *)&prcopt_.rtcmopt,    ""     },
-    
-    {"file-satantfile", 2,  (void *)&filopt_.satantp,    ""     },
-    {"file-rcvantfile", 2,  (void *)&filopt_.rcvantp,    ""     },
-    {"file-staposfile", 2,  (void *)&filopt_.stapos,     ""     },
-    {"file-geoidfile",  2,  (void *)&filopt_.geoid,      ""     },
-    {"file-ionofile",   2,  (void *)&filopt_.iono,       ""     },
-    {"file-dcbfile",    2,  (void *)&filopt_.dcb,        ""     },
-    {"file-eopfile",    2,  (void *)&filopt_.eop,        ""     },
-    {"file-blqfile",    2,  (void *)&filopt_.blq,        ""     },
-    {"file-elmaskfile", 2,  (void *)&filopt_.elmask,     ""     },
-    {"file-tempdir",    2,  (void *)&filopt_.tempdir,    ""     },
-    {"file-geexefile",  2,  (void *)&filopt_.geexe,      ""     },
-    {"file-solstatfile",2,  (void *)&filopt_.solstat,    ""     },
-    {"file-tracefile",  2,  (void *)&filopt_.trace,      ""     },
+    {"pos1-snrwmargin_gps",  1, (void *)&prcopt_.snrwmargin[0],  ""          },
+    {"pos1-snrwmargin_glo",  1, (void *)&prcopt_.snrwmargin[1],  ""          },
+    {"pos1-snrwmargin_gal",  1, (void *)&prcopt_.snrwmargin[2],  ""          },
+    {"pos1-snrwmargin_qzs",  1, (void *)&prcopt_.snrwmargin[3],  ""          },
+    {"pos1-snrwmargin_bds",  1, (void *)&prcopt_.snrwmargin[4],  ""          },
+
+    {"pos1-snrweratio_gps",  1, (void *)&prcopt_.snrweratio[0],  ""          },
+    {"pos1-snrweratio_glo",  1, (void *)&prcopt_.snrweratio[1],  ""          },
+    {"pos1-snrweratio_gal",  1, (void *)&prcopt_.snrweratio[2],  ""          },
+    {"pos1-snrweratio_qzs",  1, (void *)&prcopt_.snrweratio[3],  ""          },
+    {"pos1-snrweratio_bds",  1, (void *)&prcopt_.snrweratio[4],  ""          },
+
+    {"pos2-ionocorr",        3, (void *)&prcopt_.ionocorr,       SWTOPT      },
+    {"pos2-armode",          3, (void *)&prcopt_.modear,         ARMOPT      },
+    {"pos2-gloarmode",       3, (void *)&prcopt_.glomodear,      GAROPT      },
+    {"pos2-bdsarmode",       3, (void *)&prcopt_.bdsmodear,      SWTOPT      },
+    {"pos2-arsys",           0, (void *)&prcopt_.arsys,          NAVOPT      },
+    {"pos2-car",             3, (void *)&prcopt_.car,            SWTOPT      },
+    {"pos2-arthres",         1, (void *)&prcopt_.thresar[0],     ""          },
+    {"pos2-arthres1",        1, (void *)&prcopt_.thresar[1],     ""          },
+    {"pos2-arthres2",        1, (void *)&prcopt_.thresar[2],     ""          },
+    {"pos2-arthres3",        1, (void *)&prcopt_.thresar[3],     ""          },
+    {"pos2-arthres4",        1, (void *)&prcopt_.thresar[4],     ""          },
+    {"pos2-carthres1",       1, (void *)&prcopt_.thresar[5],     ""          },
+    {"pos2-carthres2",       1, (void *)&prcopt_.thresar[6],     ""          },
+    {"pos2-arlockcnt",       0, (void *)&prcopt_.minlock,        ""          },
+    {"pos2-arelmask",        1, (void *)&elmaskar_,              "deg"       },
+    {"pos2-arminfix",        0, (void *)&prcopt_.minfix,         ""          },
+    {"pos2-armaxiter",       0, (void *)&prcopt_.armaxiter,      ""          },
+    {"pos2-elmaskhold",      1, (void *)&elmaskhold_,            "deg"       },
+    {"pos2-aroutcnt",        0, (void *)&prcopt_.maxout,         ""          },
+    {"pos2-maxage",          1, (void *)&prcopt_.maxtdiff,       "s"         },
+    {"pos2-slipthres",       1, (void *)&prcopt_.thresslip,      "m"         },
+    {"pos2-rejionno",        1, (void *)&prcopt_.maxinno,        "m"         },
+    {"pos2-rejgdop",         1, (void *)&prcopt_.maxgdop,        ""          },
+    {"pos2-niter",           0, (void *)&prcopt_.niter,          ""          },
+    {"pos2-baselen",         1, (void *)&prcopt_.baseline[0],    "m"         },
+    {"pos2-basesig",         1, (void *)&prcopt_.baseline[1],    "m"         },
+    {"pos2-siggpsIIR-M",     3, (void *)&prcopt_.pppsig[0],      SIGOPT1     },
+    {"pos2-siggpsIIF",       3, (void *)&prcopt_.pppsig[1],      SIGOPT2     },
+    {"pos2-siggpsIIIA",      3, (void *)&prcopt_.pppsig[2],      SIGOPT2     },
+    {"pos2-siggal",          3, (void *)&prcopt_.pppsig[3],      SIGOPT3     },
+    {"pos2-sigqzs1_2",       3, (void *)&prcopt_.pppsig[4],      SIGOPT4     },
+    {"pos2-sigqzs2A",        3, (void *)&prcopt_.pppsig[5],      SIGOPT5     },
+    {"pos2-sigqzs3",         3, (void *)&prcopt_.pppsig[6],      SIGOPT6     },
+    {"pos2-sigbds2",         3, (void *)&prcopt_.pppsig[7],      SIGOPT7     },
+    {"pos2-sigbds3",         3, (void *)&prcopt_.pppsig[8],      SIGOPT8     },
+    {"pos2-ign_chierr",      3, (void *)&prcopt_.ign_chierr,     SWTOPT      },
+    {"pos2-bds2bias",        3, (void *)&prcopt_.bds2bias,       SWTOPT      },
+    {"pos2-pppsatcb",        3, (void *)&prcopt_.pppsatcb,       SATCB       },
+    {"pos2-pppsatpb",        3, (void *)&prcopt_.pppsatpb,       SATPB       },
+    {"pos2-uncorrbias",      3, (void *)&prcopt_.unbias,         UNCORRB     },
+    {"pos2-maxbiasdt",       0, (void *)&prcopt_.maxbiasdt,      "s"         },
+    {"pos2-tint",            1, (void *)&prcopt_.tint,           "s"         },
+    {"pos2-clkopt",          3, (void *)&prcopt_.clkopt,         SWTOPT      },
+    {"pos2-clkdopt",         3, (void *)&prcopt_.clkdopt,        SWTOPT      },
+    {"pos2-insint",          1, (void *)&prcopt_.insint,         "s"         },
+    {"pos2-maskobj",         2, (void *)&prcopt_.maskobj,        ""          },
+    {"pos2-insreset",        1, (void *)&prcopt_.insreset,       "s"         },
+    {"pos2-maxdist",         1, (void *)&prcopt_.maxdist,        "m"         },
+
+    {"out-solformat",        3, (void *)&solopt_.posf,           SOLOPT      },
+    {"out-outhead",          3, (void *)&solopt_.outhead,        SWTOPT      },
+    {"out-outopt",           3, (void *)&solopt_.outopt,         SWTOPT      },
+    {"out-outvel",           3, (void *)&solopt_.outvel,         SWTOPT      },
+    {"out-timesys",          3, (void *)&solopt_.times,          TSYOPT      },
+    {"out-timeform",         3, (void *)&solopt_.timef,          TFTOPT      },
+    {"out-timendec",         0, (void *)&solopt_.timeu,          ""          },
+    {"out-degform",          3, (void *)&solopt_.degf,           DFTOPT      },
+    {"out-fieldsep",         2, (void *) solopt_.sep,            ""          },
+    {"out-outsingle",        3, (void *)&prcopt_.outsingle,      SWTOPT      },
+    {"out-maxsolstd",        1, (void *)&solopt_.maxsolstd,      "m"         },
+    {"out-height",           3, (void *)&solopt_.height,         HGTOPT      },
+    {"out-geoid",            3, (void *)&solopt_.geoid,          GEOOPT      },
+    {"out-solstatic",        3, (void *)&solopt_.solstatic,      STAOPT      },
+    {"out-nmeaintv1",        1, (void *)&solopt_.nmeaintv[0],    "s"         },
+    {"out-nmeaintv2",        1, (void *)&solopt_.nmeaintv[1],    "s"         },
+    {"out-outstat",          3, (void *)&solopt_.sstat,          STSOPT      },
+
+    {"stats-uraratio",       1, (void *)&prcopt_.uraratio,       ""          },
+    {"stats-eratio1",        1, (void *)&prcopt_.eratio[0],      ""          },
+    {"stats-eratio2",        1, (void *)&prcopt_.eratio[1],      ""          },
+    {"stats-errphase",       1, (void *)&prcopt_.err[1],         "m"         },
+    {"stats-errphaseel",     1, (void *)&prcopt_.err[2],         "m"         },
+    {"stats-errphasebl",     1, (void *)&prcopt_.err[3],         "m/10km"    },
+    {"stats-errdoppler",     1, (void *)&prcopt_.err[4],         "Hz"        },
+    {"stats-stdbias",        1, (void *)&prcopt_.std[0],         "m"         },
+    {"stats-stdiono",        1, (void *)&prcopt_.std[1],         "m"         },
+    {"stats-stdtrop",        1, (void *)&prcopt_.std[2],         "m"         },
+    {"stats-stdatt",         1, (void *)&prcopt_.stdatt,         "deg"       },
+    {"stats-stdvel",         1, (void *)&prcopt_.stdvel,         "m/s"       },
+    {"stats-stdpos",         1, (void *)&prcopt_.stdpos,         "m"         },
+    {"stats-stdaccb",        1, (void *)&prcopt_.stdaccb,        "micro-g"   },
+    {"stats-stdgyrob",       1, (void *)&prcopt_.stdgyrob,       "deg/h"     },
+    {"stats-stdclko",        1, (void *)&prcopt_.stdclko,        "m"         },
+    {"stats-stdclkd",        1, (void *)&prcopt_.stdclkd,        "m/s"       },
+    {"stats-prnaccelh",      1, (void *)&prcopt_.prn[3],         "m/s^2"     },
+    {"stats-prnaccelv",      1, (void *)&prcopt_.prn[4],         "m/s^2"     },
+    {"stats-prnbias",        1, (void *)&prcopt_.prn[0],         "m"         },
+    {"stats-prniono",        1, (void *)&prcopt_.prn[1],         "m"         },
+    {"stats-prntrop",        1, (void *)&prcopt_.prn[2],         "m"         },
+    {"stats-prnpos",         1, (void *)&prcopt_.prn[5],         "m"         },
+    {"stats-prnifb",         1, (void *)&prcopt_.prn[6],         "m"         },
+    {"stats-prnclkd",        1, (void *)&prcopt_.prn[7],         "m"         },
+    {"stats-prnclk_gps",     1, (void *)&prcopt_.prn[8],         "m"         },
+    {"stats-prnclk_glo",     1, (void *)&prcopt_.prn[9],         "m"         },
+    {"stats-prnclk_gal",     1, (void *)&prcopt_.prn[10],        "m"         },
+    {"stats-prnclk_qzs",     1, (void *)&prcopt_.prn[11],        "m"         },
+    {"stats-prnclk_bds",     1, (void *)&prcopt_.prn[12],        "m"         },
+    {"stats-prnclk_irn",     1, (void *)&prcopt_.prn[13],        "m"         },
+    {"stats-prnclk_bds2",    1, (void *)&prcopt_.prn[14],        "m"         },
+    {"stats-prnaccn",        1, (void *)&prcopt_.prnaccn,        "micro-g/Hz"},
+    {"stats-prngyron",       1, (void *)&prcopt_.prngyron,       "deg/h"     },
+    {"stats-prnaccb",        1, (void *)&prcopt_.prnaccb,        "micro-g/Hz"},
+    {"stats-prngyrob",       1, (void *)&prcopt_.prngyrob,       "deg/h"     },
+    {"stats-clkjump",        1, (void *)&prcopt_.clkjump,        "s"         },
+    {"stats-clkstab",        1, (void *)&prcopt_.sclkstab,       "s/s"       },
+
+    {"ant1-postype",         3, (void *)&antpostype_[0],         POSOPT      },
+    {"ant1-pos1",            1, (void *)&antpos_[0][0],          "deg|m"     },
+    {"ant1-pos2",            1, (void *)&antpos_[0][1],          "deg|m"     },
+    {"ant1-pos3",            1, (void *)&antpos_[0][2],          "m|m"       },
+    {"ant1-anttype",         2, (void *)prcopt_.anttype[0],      ""          },
+    {"ant1-antdele",         1, (void *)&prcopt_.antdel[0][0],   "m"         },
+    {"ant1-antdeln",         1, (void *)&prcopt_.antdel[0][1],   "m"         },
+    {"ant1-antdelu",         1, (void *)&prcopt_.antdel[0][2],   "m"         },
+    {"ant1-antimux",         1, (void *)&prcopt_.antimu[0],      "m"         },
+    {"ant1-antimuy",         1, (void *)&prcopt_.antimu[1],      "m"         },
+    {"ant1-antimuz",         1, (void *)&prcopt_.antimu[2],      "m"         },
+    {"ant1-rotimux",         1, (void *)&prcopt_.rotimu[0],      "deg"       },
+    {"ant1-rotimuy",         1, (void *)&prcopt_.rotimu[1],      "deg"       },
+    {"ant1-rotimuz",         1, (void *)&prcopt_.rotimu[2],      "deg"       },
+
+    {"ant2-postype",         3, (void *)&antpostype_[1],         POSOPT      },
+    {"ant2-pos1",            1, (void *)&antpos_[1][0],          "deg|m"     },
+    {"ant2-pos2",            1, (void *)&antpos_[1][1],          "deg|m"     },
+    {"ant2-pos3",            1, (void *)&antpos_[1][2],          "m|m"       },
+    {"ant2-anttype",         2, (void *)prcopt_.anttype[1],      ""          },
+    {"ant2-antdele",         1, (void *)&prcopt_.antdel[1][0],   "m"         },
+    {"ant2-antdeln",         1, (void *)&prcopt_.antdel[1][1],   "m"         },
+    {"ant2-antdelu",         1, (void *)&prcopt_.antdel[1][2],   "m"         },
+    {"ant2-maxaveep",        0, (void *)&prcopt_.maxaveep,       ""          },
+    {"ant2-initrst",         3, (void *)&prcopt_.initrst,        SWTOPT      },
+
+    {"misc-timeinterp",      3, (void *)&prcopt_.intpref,        SWTOPT      },
+    {"misc-sbasatsel",       0, (void *)&prcopt_.sbassatsel,     "0:all"     },
+    {"misc-rnxopt1",         2, (void *)prcopt_.rnxopt[0],       ""          },
+    {"misc-rnxopt2",         2, (void *)prcopt_.rnxopt[1],       ""          },
+    {"misc-pppopt",          2, (void *)prcopt_.pppopt,          ""          },
+    {"misc-rtcmopt",         2, (void *)&prcopt_.rtcmopt,        ""          },
+
+    {"file-satantfile",      2, (void *)&filopt_.satantp,        ""          },
+    {"file-rcvantfile",      2, (void *)&filopt_.rcvantp,        ""          },
+    {"file-staposfile",      2, (void *)&filopt_.stapos,         ""          },
+    {"file-geoidfile",       2, (void *)&filopt_.geoid,          ""          },
+    {"file-ionofile",        2, (void *)&filopt_.iono,           ""          },
+    {"file-dcbfile",         2, (void *)&filopt_.dcb,            ""          },
+    {"file-eopfile",         2, (void *)&filopt_.eop,            ""          },
+    {"file-blqfile",         2, (void *)&filopt_.blq,            ""          },
+    {"file-elmaskfile",      2, (void *)&filopt_.elmask,         ""          },
+    {"file-tempdir",         2, (void *)&filopt_.tempdir,        ""          },
+    {"file-solstatfile",     2, (void *)&filopt_.solstat,        ""          },
+    {"file-tracefile",       2, (void *)&filopt_.trace,          ""          },
+    {"file-fcbfile",         2, (void *)&filopt_.fcb,            ""          },
+    {"file-biafile",         2, (void *)&filopt_.bia,            ""          },
+    {"file-maskfile",        2, (void *)&filopt_.mask,           ""          },
+    {"file-exclsatsfile",    2, (void *)&filopt_.exclsatsfile,   ""          },
+    {"file-pppkf",           2, (void *)&filopt_.kf,             ""          },
     
     {"",0,NULL,""} /* terminator */
 };
+
 /* discard space characters at tail ------------------------------------------*/
 static void chop(char *str)
 {
@@ -245,6 +349,53 @@ static int str2enum(const char *str, const char *comment, int *val)
     }
     return 0;
 }
+/* SNR weighting threshold option value --------------------------------------*/
+static int snrwthresopt(opt_t *opt, const char *str, prcopt_t *popt)
+{
+    char buff[1024],*p,*value,sig[8],stripsig[8];
+    int i,sysno;
+    int sys = -1;
+    int midx = -1;
+    
+    /* SNR weight */
+    if (strstr(opt->name, "pos1-snrwthres") == NULL) {
+        return 0;
+    }
+
+    if      (strstr(opt->name, "gps")) { sys=SYS_GPS; }
+    else if (strstr(opt->name, "glo")) { sys=SYS_GLO; }
+    else if (strstr(opt->name, "gal")) { sys=SYS_GAL; }
+    else if (strstr(opt->name, "qzs")) { sys=SYS_QZS; }
+    else if (strstr(opt->name, "bds")) { sys=SYS_CMP; }
+    else return 0;
+
+    sysno=sys2pppsys(sys);
+
+    strncpy(buff, str, sizeof(buff)-1);
+    buff[sizeof(buff)-1]='\0';
+    
+    p=strtok(buff, "=");
+    if (!p) return 0;
+
+    strncpy(sig, p, sizeof(sig)-1);
+    sig[sizeof(sig)-1]='\0';
+
+    strncpy(stripsig, strip(sig), sizeof(stripsig)-1);
+    stripsig[sizeof(stripsig)-1]='\0';
+
+    midx=obs2midx(sys,stripsig);
+
+    if (midx<0 || MAXFREQ<=midx) return 0;
+
+    value=strtok(NULL, "=");
+    if (!value) return 0;
+    for (i=0;i<SNRWTHRESNUM;i++) popt->snrwthres[sysno][midx][i]=0.0;
+    for (p=strtok(value,","),i=0;p&&i<SNRWTHRESNUM;p=strtok(NULL,",")) {
+        popt->snrwthres[sysno][midx][i++]=atof(p);
+    }
+
+    return 1;
+}
 /* search option ---------------------------------------------------------------
 * search option record
 * args   : char   *name     I  option name
@@ -276,6 +427,7 @@ extern int str2opt(opt_t *opt, const char *str)
         case 1: *(double *)opt->var=atof(str); break;
         case 2: strcpy((char *)opt->var,str);  break;
         case 3: return str2enum(str,opt->comment,(int *)opt->var);
+        case 4: return snrwthresopt(opt, str, &prcopt_);
         default: return 0;
     }
     return 1;
@@ -300,7 +452,7 @@ extern int opt2str(const opt_t *opt, char *str)
     }
     return (int)(p-str);
 }
-/* option to string -------------------------------------------------------------
+/* option to string ------------------------------------------------------------
 * convert option to string (keyword=value # comment)
 * args   : opt_t  *opt      I  option
 *          char   *buff     O  option string
@@ -442,12 +594,7 @@ static void buff2sysopts(void)
         for (p=strtok(buff,","),j=0;p&&j<9;p=strtok(NULL,",")) {
             prcopt_.snrmask.mask[i][j++]=atof(p);
         }
-    }
-    /* number of frequency (4:L1+L5) */
-    if (prcopt_.nf==4) {
-        prcopt_.nf=3;
-        prcopt_.freqopt=1;
-    }
+    } 
 }
 /* options to system options buffer ------------------------------------------*/
 static void sysopts2buff(void)
@@ -489,11 +636,6 @@ static void sysopts2buff(void)
         for (j=0;j<9;j++) {
             p+=sprintf(p,"%s%.0f",j>0?",":"",prcopt_.snrmask.mask[i][j]);
         }
-    }
-    /* number of frequency (4:L1+L5) */
-    if (prcopt_.nf==3&&prcopt_.freqopt==1) {
-        prcopt_.nf=4;
-        prcopt_.freqopt=0;
     }
 }
 /* reset system options to default ---------------------------------------------

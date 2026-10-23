@@ -3,7 +3,6 @@
 *
 *          Copyright (C) 2015 by T.TAKASU, All rights reserved.
 *
-* version : $Revision:$ $Date:$
 * history : 2015/01/11 1.0  separated from rtkrcv.c
 *-----------------------------------------------------------------------------*/
 #ifndef VT_H

@@ -18,8 +18,9 @@
 *         Reflects Firmware Version 3.6.7, August 25, 2016
 *     [7] Javad GNSS, GREIS GNSS Receiver External Interface Specification,
 *         Reflects Firmware Version 3.7.2, October 11, 2017
+*     [8] Javad GNSS, GREIS GNSS Receiver External Interface Specification,
+*         Reflects Firmware Version 4.5.0, October 14, 2024
 *
-* version : $Revision:$ $Date:$
 * history : 2011/05/27 1.0  new
 *           2011/07/07 1.1  fix QZSS IODC-only-update problem
 *           2012/07/17 1.2  change GALILEO scale factor for short pseudorange
@@ -52,6 +53,7 @@
 *                           use API code2idx() to get freq-index
 *                           use integer types in stdint.h
 *           2023/01/12 1.17 support ephemeris type in eph_t
+*           2026/08/01 1.3.0 update signal allocation by ref [8]
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
@@ -103,7 +105,7 @@ static int is_meas(char sig)
 /* convert signal to freq-index ----------------------------------------------*/
 static int sig2idx(int sys, char sig, int *code)
 {
-    const uint8_t codes[7][6]={ /* ref [7] table 3-8 */
+    const uint8_t codes[7][6]={ /* ref [7] / ref [8] table 3-8 */
         /*  c/C       1        2        3        5        l  */
         /* (CA/L1    P/L1     P/L2    CA/L2      L5      L1C) */
         {CODE_L1C,CODE_L1W,CODE_L2W,CODE_L2X,CODE_L5X,CODE_L1X}, /* GPS */
@@ -111,7 +113,7 @@ static int sig2idx(int sys, char sig, int *code)
         {CODE_L1C,0       ,0       ,0       ,CODE_L5X,0       }, /* SBS */
         {CODE_L1X,CODE_L8X,CODE_L7X,CODE_L6X,CODE_L5X,0       }, /* GAL */
         {CODE_L1C,CODE_L1P,CODE_L2P,CODE_L2C,CODE_L3X,0       }, /* GLO */
-        {CODE_L2I,0       ,CODE_L7I,CODE_L6I,CODE_L5X,CODE_L1X}, /* BDS */
+        {CODE_L2I,CODE_L8D,CODE_L7I,CODE_L6I,CODE_L5X,CODE_L1X}, /* BDS */
         {0       ,0       ,0       ,0       ,CODE_L5X,0       }  /* IRN */
     };
     int i,j,idx;
@@ -349,16 +351,13 @@ static int decode_SI(raw_t *raw)
     for (i=0;i<raw->obuf.n&&i<MAXOBS;i++) {
         usi=U1(p); p+=1;
         
-        if      (usi<=  0) sat=0;                      /* ref [5] table 3-6 */
+        if      (usi<=  0) sat=0;                      /* ref [8] table 3-7 */
         else if (usi<= 37) sat=satno(SYS_GPS,usi);     /*   1- 37: GPS */
         else if (usi<= 70) sat=255;                    /*  38- 70: GLONASS */
         else if (usi<=119) sat=satno(SYS_GAL,usi-70);  /*  71-119: GALILEO */
-        else if (usi<=142) sat=satno(SYS_SBS,usi);     /* 120-142: SBAS */
-        else if (usi<=192) sat=0;
-        else if (usi<=197) sat=satno(SYS_QZS,usi);     /* 193-197: QZSS */
-        else if (usi<=210) sat=0;
-        else if (usi<=240) sat=satno(SYS_CMP,usi-210); /* 211-240: BeiDou */
-        else if (usi<=247) sat=satno(SYS_IRN,usi-240); /* 241-247: IRNSS */
+        else if (usi<=192) sat=satno(SYS_SBS,usi);     /* 120-192: SBAS */
+        else if (usi<=210) sat=satno(SYS_QZS,usi);     /* 193-210: QZSS */
+        else if (usi<=254) sat=satno(SYS_CMP,usi-210); /* 211-254: BeiDou */
         else               sat=0;
         
         raw->obuf.data[i].time=raw->time;

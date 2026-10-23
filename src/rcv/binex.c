@@ -1,13 +1,13 @@
 /*------------------------------------------------------------------------------
 * BINEX.c : BINEX dependent functions
 *
-*          Copyright (C) 2013-2023 by T.TAKASU, All rights reserved.
+* Copyright (C) 2026 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2013-2023 by T.TAKASU, All rights reserved.
 *
 * reference :
 *     [1] UNAVCO, BINEX: Binary exchange format (updated on July 13, 2018)
 *         (http://BINEX.unavco.org/BINEX.html)
 *
-* version : $Revision:$ $Date:$
 * history : 2013/02/20 1.0 new
 *           2013/04/15 1.1 support 0x01-05 beidou-2/compass ephemeris
 *           2013/05/18 1.2 fix bug on decoding obsflags in message 0x7f-05
@@ -34,6 +34,11 @@
 *           2021/02/17 1.13 fix bug on reading unsupported sat data in 0x7f-05
 *           2021/04/08 1.14 fix bug on 100 nsec time-tag error in in 0x7f-05
 *           2023/01/12 1.15 support ephemeris type in eph_t
+*           2026/01/23 1.16 branch from ver.2.4.3b35 for MALIB
+*                           handle obsflags[2] = 0 for GLONASS frequency 
+*                            channel number 0 in 0x7f-05
+*           2026/02/27 1.17 update handling of obsflags[2] = 0 for GLONASS
+*                            frequency channel number 0 in 0x7f-05
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
@@ -936,6 +941,9 @@ static uint8_t *decode_bnx_7f_05_obs(raw_t *raw, uint8_t *buff, int sat,
             if (sys==SYS_GLO&&!raw->nav.glo_fcn[prn-1]) {
                 raw->nav.glo_fcn[prn-1]=fcn+8; /* fcn+8 */
             }
+        }
+        else if (sys==SYS_GLO&&0<raw->nav.geph[prn-1].sat) {
+            fcn=raw->nav.geph[prn-1].frq;
         }
         acc=(flags[0]&0x20)?0.0001:0.00002; /* phase accuracy */
         

@@ -6,7 +6,6 @@
 * references :
 *     see rtcm.c
 *
-* version : $Revision:$ $Date:$
 * history : 2011/11/28 1.0  separated from rtcm.c
 *           2014/10/21 1.1  fix problem on week rollover in rtcm 2 type 14
 *-----------------------------------------------------------------------------*/

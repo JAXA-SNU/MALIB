@@ -123,7 +123,7 @@ jobs:
         OBS_FILE="data/MALIB_OSS_data_obsnav_240822-1100.obs"
         NAV_FILE="data/MALIB_OSS_data_obsnav_240822-1100.nav"
         L6E_FILE="data/2024235L.209.l6"
-        CONFIG_FILE="bin/rnx2rtkp.conf"
+        CONFIG_FILE="bin/rnx2rtkp_sample.conf"
         OUTPUT_FILE="data/out/rnx2rtkp_test.pos"
         
         # Create output directory
@@ -281,20 +281,20 @@ jobs:
         echo "=== MALIB rtkrcv Real-time Processing Test (Replay) ==="
         
         # Configuration file check
-        CONFIG_FILE="bin/rtkrcv.conf"
+        CONFIG_FILE="bin/rtkrcv_sample.conf"
         
-        echo "=== Using existing rtkrcv.conf ==="
+        echo "=== Using existing rtkrcv_sample.conf ==="
         if [ -f "$CONFIG_FILE" ]; then
-          echo "✅ rtkrcv.conf found"
+          echo "✅ rtkrcv_sample.conf found"
           echo "Key settings:"
           grep -E "^(inpstr|outstr|pos1-posmode|pos1-sateph)" "$CONFIG_FILE" || echo "Settings displayed"
         else
-          echo "❌ rtkrcv.conf not found"
+          echo "❌ rtkrcv_sample.conf not found"
           exit 1
         fi
         
         echo "=== Verifying input files referenced in config ==="
-        # Check files referenced in rtkrcv.conf
+        # Check files referenced in rtkrcv_sample.conf
         EXPECTED_FILES=(
           "data/MALIB_OSS_data_obsnav_240822-1100.sbf"
           "data/MALIB_OSS_data_l6e_240822-1100.sbf"
@@ -375,7 +375,7 @@ jobs:
           fi
         fi
         
-        # Check positioning results (path specified in rtkrcv.conf)
+        # Check positioning results (path specified in rtkrcv_sample.conf)
         # Note: rtkrcv positioning verification is limited in CI environment
         # Real-time functionality is verified in local/production environments
         echo "📝 Note: rtkrcv build and configuration verification completed"

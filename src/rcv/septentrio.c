@@ -1,15 +1,16 @@
 /*------------------------------------------------------------------------------
 * septentrio.c : Septentrio Binary Format (SBF) decoder
 *
-*          Copyright (C) 2020-2021 by Tomoji TAKASU
+* Copyright (C) 2024-2026 Japan Aerospace Exploration Agency. All Rights Reserved.
+* Copyright (C) 2020-2021 by Tomoji TAKASU
 *
 * reference :
 *     [1] Septentrio, mosaic-X5 reference guide applicable to version 4.8.0 of
 *         the firmware, June 4, 2020
 *     [2] Septentrio, AsteRx-m3 CLAS Reference Guide Applicable to version 4.12.1
 *         of the Firmware, April 14, 2021
-*
-* version : $Revision:$
+*     [3] Septentrio, mosaic-G5 Reference Guide Applicable to version 1.0.1 of 
+*         the Firmware, Norvember 13, 2025
 *
 * history : 2013/07/17  1.0  begin writing
 *           2013/10/24  1.1  GPS L1 working
@@ -45,12 +46,18 @@
 *           2024/03/01  1.15 improved performance of the decode_qzsrawl6()
 *           2024/08/02  1.16 suppress warnings
 *                            fix bug decode_ionutc()
+*           2025/03/24  1.17 support External Sensor and GNSS Attitude
+*           2025/12/26  1.18 support input from multiple SSR data sources
+*                            change trace log level
+*                            fix bug signal type offset when SigIdxLo=31
+*           2026/02/27  1.19 support QZSRawL6E and QZSRawL6D [3]
+*                            update support signals
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
 #define SBF_SYNC1       0x24    /* SBF block header 1 */
 #define SBF_SYNC2       0x40    /* SBF block header 2 */
-#define SBF_MAXSIG      36      /* SBF max signal number */
+#define SBF_MAXSIG      39      /* SBF max signal number */
 
 #define SBF_MEASEPOCH   4027    /* SBF GNSS measurements */
 #define SBF_MEASEXTRA   4000    /* SBF GNSS measurements extra info */
@@ -62,7 +69,23 @@
 #define SBF_BDSRAW      4047    /* SBF BDS navigation page */
 #define SBF_QZSRAWL1CA  4066    /* SBF QZSS C/A subframe */
 #define SBF_QZSRAWL6    4069    /* SBF QZSS L6 message */
+#define SBF_QZSRAWL6D   4270    /* SBF QZSS L6D message */
+#define SBF_QZSRAWL6E   4271    /* SBF QZSS L6E message */
 #define SBF_NAVICRAW    4093    /* SBF NavIC/IRNSS subframe */
+#define SBF_EXTSENSORMEAS 4050  /* SBF External Sensor Blocks */
+#define SBF_ATTEULER    5938    /* SBF GNSS Attitude Blocks */
+
+#define DO_NOT_USE      -2.0E10 /* do not use External Sensor/GNSS Attitude */
+
+#define TYPE_ACCEL      0       /* external sensor blocks type acceleration */
+#define TYPE_ANGU       1       /* external sensor blocks type angular rate */
+#define TYPE_INFO       2       /* external sensor blocks type info */
+#define TYPE_VCITY      3       /* external sensor blocks type velocity */
+#define TYPE_ZEROF      4       /* external sensor blocks type zero-velocity flag */
+
+#define AM_NOATT        0       /* No attitude */
+#define AM_HP_FLOAT     1       /* Heading, pitch (roll = 0), aux antenna positions obtained with float ambiguities */
+#define AM_HP_FIX       2       /* Heading, pitch (roll = 0), aux antenna positions obtained with fixed ambiguities */
 
 /* get fields (little-endian) ------------------------------------------------*/
 #define U1(p) (*((uint8_t *)(p)))
@@ -70,6 +93,8 @@
 static uint16_t U2(uint8_t *p) {uint16_t a; memcpy(&a,p,2); return a;}
 static uint32_t U4(uint8_t *p) {uint32_t a; memcpy(&a,p,4); return a;}
 static int32_t  I4(uint8_t *p) {int32_t  a; memcpy(&a,p,4); return a;}
+static float    F4(uint8_t *p) {float    a; memcpy(&a,p,4); return a;}
+static double   F8(uint8_t *p) {double   a; memcpy(&a,p,8); return a;}
 
 /* svid to satellite number ([1] 4.1.9) --------------------------------------*/
 static int svid2sat(int svid)
@@ -84,7 +109,7 @@ static int svid2sat(int svid)
     if (svid<=140) return satno(SYS_SBS,svid);
     if (svid<=180) return satno(SYS_CMP,svid-140);
     if (svid<=187) return satno(SYS_QZS,svid-180+192);
-    if (svid<=190) return 0;
+    /* if (svid<=190) return 0; */
     if (svid<=197) return satno(SYS_IRN,svid-190);
     if (svid<=215) return satno(SYS_SBS,svid-57);
     if (svid<=222) return satno(SYS_IRN,svid-208);
@@ -129,7 +154,10 @@ static uint8_t sig_tbl[SBF_MAXSIG+1][2]={ /* system, obs-code */
     {SYS_QZS, CODE_L1Z}, /* 33: QZS L1S */
     {SYS_CMP, CODE_L7D}, /* 34: BDS B2b */
     {      0,        0}, /* 35: reserved */
-    {SYS_IRN, CODE_L9A}  /* 36: IRN S */
+    {SYS_IRN, CODE_L9A}, /* 36: IRN S */
+    {      0,        0}, /* 37: reserved */
+    {SYS_QZS, CODE_L1E}, /* 38: QZS L1E(L1CB) */
+    {SYS_QZS, CODE_L5P}  /* 39: QZS L5S */
 };
 /* signal number to freq-index and code --------------------------------------*/
 static int sig2idx(int sat, int sig, const char *opt, uint8_t *code)
@@ -160,6 +188,7 @@ static int sig2idx(int sat, int sig, const char *opt, uint8_t *code)
         if (strstr(opt,"-JL1Z")&&idx==0) return (*code==CODE_L1Z)?0:-1;
         if (*code==CODE_L1L) return (nex<1)?-1:NFREQ;
         if (*code==CODE_L1Z) return (nex<2)?-1:NFREQ+1;
+        if (*code==CODE_L5P) return (nex<3)?-1:NFREQ+2;
     }
     else if (sys==SYS_CMP) {
         if (strstr(opt,"-CL1P")&&idx==0) return (*code==CODE_L1P)?0:-1;
@@ -216,7 +245,7 @@ static int decode_measepoch(raw_t *raw)
         info=U1(p+18);
         n2  =U1(p+19);
         fcn =0;
-        if (sig==31) sig+=(info>>3)*32;
+        if (sig==31) sig=(info>>3)+32;
         else if (sig>=8&&sig<=11) fcn=(info>>3)-8;
         
         if (ant!=ant_sel) {
@@ -265,7 +294,7 @@ static int decode_measepoch(raw_t *raw)
             sig =U1(p)&0x1f;
             ant =U1(p)>>5;
             info=U1(p+5);
-            if (sig==31) sig+=(info>>3)*32;
+            if (sig==31) sig=(info>>3)+32;
             
             if (ant!=ant_sel) {
                 trace(3,"sbf measepoch ant error: sat=%d ant=%d\n",sat,ant);
@@ -745,9 +774,9 @@ static int decode_qzsrawl1ca(raw_t *raw)
     return decode_rawca(raw,SYS_QZS);
 }
 /* decode SBF QZS L6 message -------------------------------------------------*/
-static int decode_qzsrawl6(raw_t *raw, rtcm_t *rtcm)
+static int decode_qzsrawl6(raw_t *raw, rtcm_t *rtcm, int index)
 {
-    gtime_t time;
+    gtime_t gt;
     double tow;
     int prn, sat, week, i, j, ret;
     unsigned char svid, parity, rscnt, source, rxchannel;
@@ -762,7 +791,7 @@ static int decode_qzsrawl6(raw_t *raw, rtcm_t *rtcm)
     /* Get time information */
     tow =U4(p);                      /* TOW in ms */
     week=U2(p+4);                    /* number of weeks */
-    time=gpst2time(week, tow*0.001);
+    gt=gpst2time(week, tow*0.001);
 
     svid  =U1(p+6);
     parity=U1(p+7);
@@ -778,7 +807,7 @@ static int decode_qzsrawl6(raw_t *raw, rtcm_t *rtcm)
         return -1;
     }
     trace(3, "SBF QZSRawL6 : %s, prn=%d,SVID=%d, Parity=%d, RSCnt=%d, Source=%d, rxchannel=%d\n", 
-        time_str(time,0), prn, svid, parity, rscnt, source, rxchannel);
+        time_str(gt,0), prn, svid, parity, rscnt, source, rxchannel);
 
     if (parity == 0) {
         trace(2, "SBF decode_qzsrawl6 RS decode error\n");
@@ -786,7 +815,7 @@ static int decode_qzsrawl6(raw_t *raw, rtcm_t *rtcm)
     }
 
     j=0;
-    for (i=0;i<63;i++){
+    for (i=0;i<63;i++) {
         buff[j]   =((U4(p+12+i*4)>>24) & 0x000000FF);     /* take first byte  */
         buff[1+j] =((U4(p+12+i*4)>>16) & 0x000000FF);     /* take second byte */
         buff[2+j] =((U4(p+12+i*4)>> 8) & 0x000000FF);     /* take third byte  */
@@ -795,7 +824,7 @@ static int decode_qzsrawl6(raw_t *raw, rtcm_t *rtcm)
     }
 
     memcpy(rtcm->buff,buff,250);
-    ret=decode_qzss_l6emsg(rtcm);
+    ret=decode_qzss_l6msg(rtcm,index);
 
     return ret;
 }
@@ -860,8 +889,167 @@ static int decode_navicraw(raw_t *raw)
     }
     return 0;
 }
+/* decode SBF External Sensor Blocks Type No ---------------------------------*/
+static int extstype2no(int type)
+{
+    switch (type) {
+        case 0  : return TYPE_ACCEL; break;
+        case 1  : return TYPE_ANGU ; break;
+        case 3  : return TYPE_INFO ; break;
+        case 4  : return TYPE_VCITY; break;
+        case 20 : return TYPE_ZEROF; break;
+        default : return 0;
+    }
+}
+/* decode SBF External Sensor Blocks -----------------------------------------*/
+static int decode_extsensormeas(raw_t *raw)
+{
+    uint8_t *p=raw->buff+8;
+    int i,tow,wnc,n,sblength,type,index;
+    double x,y,z;
+
+    if (raw->len<16) {
+        trace(2,"sbf extsensormeas length error: len=%d\n",raw->len);
+        return -1;
+    }
+    tow=U4(p);
+    wnc=U2(p+4);
+    if (tow==4294967295u||wnc==65535u) {
+        trace(2,"sbf atteuler tow/wnc error: tow=%d wnc=%d\n",tow,wnc);
+        return -1;
+    }
+    n=U1(p+6);
+    if (n<1) {
+        trace(2,"sbf extsensormeas n error: n=%d\n",n);
+        return -1;
+    }
+    sblength=U1(p+7);
+
+    memset(&raw->imuatt.imu,0x00,sizeof(imu_t));
+    raw->imuatt.imu.gt=gpst2time(wnc,tow*0.001);
+    raw->imuatt.imu.n=n;
+
+    /* sub block */
+    for (i=0;i<5;i++) {
+        raw->imuatt.imu.imusub[i].type=-1;
+    }
+
+    p+=8;
+    for (i=0;i<n&&p+16<=raw->buff+raw->len;i++) {
+        type=U1(p+2);
+        index=extstype2no(type);
+
+        raw->imuatt.imu.imusub[index].source      =U1(p);
+        raw->imuatt.imu.imusub[index].sensormodel =U1(p+1);
+        raw->imuatt.imu.imusub[index].type        =type;
+        raw->imuatt.imu.imusub[index].obsinfo     =U1(p+3);
+        raw->imuatt.imu.imusub[index].temperature =getbitu(p+3,7,1); /* obsinfo bit0 */
+        raw->imuatt.imu.imusub[index].sensor      =getbitu(p+3,6,1); /* obsinfo bit1 */
+        raw->imuatt.imu.imusub[index].encrypted   =getbitu(p+3,5,1); /* obsinfo bit2 */
+
+        if (index==TYPE_ACCEL) {
+            /* acceleration */
+            x=F8(p+4);
+            y=F8(p+12);
+            z=F8(p+20);
+            if (x==DO_NOT_USE||y==DO_NOT_USE||z==DO_NOT_USE) {
+                trace(2,"sbf atteuler acceleration error: x=%.3f y=%.3f z=%.3f\n",x,y,z);
+                raw->imuatt.imu.imusub[index].type=-1;
+                p+=sblength;
+                continue;
+            }
+            raw->imuatt.imu.accel.accel[0]=x;
+            raw->imuatt.imu.accel.accel[1]=y;
+            raw->imuatt.imu.accel.accel[2]=z;
+        }
+        else if (index==TYPE_ANGU) {
+            /* angularrate */
+            x=F8(p+4);
+            y=F8(p+12);
+            z=F8(p+20);
+            if (x==DO_NOT_USE||y==DO_NOT_USE||z==DO_NOT_USE) {
+                trace(2,"sbf atteuler angularrate error: x=%.3f y=%.3f z=%.3f\n",x,y,z);
+                raw->imuatt.imu.imusub[index].type=-1;
+                p+=sblength;
+                continue;
+            }
+            raw->imuatt.imu.gyro.gyro[0]=x*D2R;
+            raw->imuatt.imu.gyro.gyro[1]=y*D2R;
+            raw->imuatt.imu.gyro.gyro[2]=z*D2R;
+        }
+        else if (index==TYPE_INFO) {
+            /* info */
+            trace(3,"not support sbf extsensormeas type=%d\n",type);
+        }
+        else if (index==TYPE_VCITY) {
+            /* vleocity */
+            trace(3,"not support sbf extsensormeas type=%d\n",type);
+        }
+        else if (index==TYPE_ZEROF) {
+            /* zerovelocityflag */
+            trace(3,"not support sbf extsensormeas type=%d\n",type);
+        }
+        p+=sblength;
+    }
+    return 13;
+}
+/* decode SBF GNSS Attitude Blocks -------------------------------------------*/
+static int decode_atteuler(raw_t *raw)
+{
+    uint8_t *p=raw->buff+8;
+    int tow,wnc,nrsv,mode;
+    float heading,pitch,roll,pitchdot,rolldot,headingdot;
+
+    if (raw->len<44) {
+        trace(2,"sbf atteuler length error: len=%d\n",raw->len);
+        return -1;
+    }
+    tow=U4(p);
+    wnc=U2(p+4);
+    if (tow==4294967295u||wnc==65535u) {
+        trace(2,"sbf atteuler tow/wnc error: tow=%d wnc=%d\n",tow,wnc);
+        return -1;
+    }
+    nrsv=U1(p+6);
+    if (nrsv==255u) {
+        trace(2,"sbf atteuler nrsv error: nrsv=%d\n",nrsv);
+        return -1;
+    }
+    mode=U2(p+8);
+    if (mode==AM_NOATT) {
+        trace(2,"sbf atteuler no attitude: mode=%d\n",mode);
+        return -1;
+    }
+    heading    =F4(p+12);
+    pitch      =F4(p+16);
+    roll       =F4(p+20);
+    pitchdot   =F4(p+24);
+    rolldot    =F4(p+28);
+    headingdot =F4(p+32);
+
+    memset(&raw->imuatt.att,0x00,sizeof(att_t));
+    raw->imuatt.att.gt        =gpst2time(wnc,tow*0.001);
+    raw->imuatt.att.nsat      =nrsv;
+    raw->imuatt.att.err[0]    =getbitu(p+7,7,2);
+    raw->imuatt.att.err[1]    =getbitu(p+7,5,2);
+    raw->imuatt.att.err[2]    =getbitu(p+7,0,3);
+    raw->imuatt.att.mode      =mode;
+    if (mode==AM_HP_FLOAT||mode==AM_HP_FIX) {
+        raw->imuatt.att.att[0]    =0.0;
+        raw->imuatt.att.attdot[0] =0.0;
+    }
+    else{
+        raw->imuatt.att.att[0]    =roll*D2R;
+        raw->imuatt.att.attdot[0] =rolldot*D2R;
+    }
+    raw->imuatt.att.att[1]    =pitch*D2R;
+    raw->imuatt.att.att[2]    =heading*D2R;
+    raw->imuatt.att.attdot[1] =pitchdot*D2R;
+    raw->imuatt.att.attdot[2] =headingdot*D2R;
+    return 14;
+}
 /* decode SBF block ----------------------------------------------------------*/
-static int decode_sbf(raw_t *raw, rtcm_t *rtcm)
+static int decode_sbf(raw_t *raw, rtcm_t *rtcm, int index)
 {
     uint8_t *p=raw->buff;
     uint32_t week,tow;
@@ -889,17 +1077,21 @@ static int decode_sbf(raw_t *raw, rtcm_t *rtcm)
         sprintf(raw->msgtype,"SBF %4d (%4d): %s",type,raw->len,tstr);
     }
     switch (type) {
-        case SBF_MEASEPOCH : return decode_measepoch (raw);
-        case SBF_MEASEXTRA : return decode_measextra (raw);
-        case SBF_GPSRAWCA  : return decode_gpsrawca  (raw);
-        case SBF_GLORAWCA  : return decode_glorawca  (raw);
-        case SBF_GALRAWFNAV: return decode_galrawfnav(raw);
-        case SBF_GALRAWINAV: return decode_galrawinav(raw);
-        case SBF_GEORAWL1  : return decode_georawl1  (raw);
-        case SBF_BDSRAW    : return decode_bdsraw    (raw);
-        case SBF_QZSRAWL1CA: return decode_qzsrawl1ca(raw);
-        case SBF_QZSRAWL6  : return decode_qzsrawl6  (raw,rtcm);
-        case SBF_NAVICRAW  : return decode_navicraw  (raw);
+        case SBF_MEASEPOCH    : return decode_measepoch    (raw);
+        case SBF_MEASEXTRA    : return decode_measextra    (raw);
+        case SBF_GPSRAWCA     : return decode_gpsrawca     (raw);
+        case SBF_GLORAWCA     : return decode_glorawca     (raw);
+        case SBF_GALRAWFNAV   : return decode_galrawfnav   (raw);
+        case SBF_GALRAWINAV   : return decode_galrawinav   (raw);
+        case SBF_GEORAWL1     : return decode_georawl1     (raw);
+        case SBF_BDSRAW       : return decode_bdsraw       (raw);
+        case SBF_QZSRAWL1CA   : return decode_qzsrawl1ca   (raw);
+        case SBF_QZSRAWL6     : return decode_qzsrawl6     (raw,rtcm,index);
+        case SBF_QZSRAWL6E    : return decode_qzsrawl6     (raw,rtcm,index);
+        case SBF_QZSRAWL6D    : return decode_qzsrawl6     (raw,rtcm,index);
+        case SBF_NAVICRAW     : return decode_navicraw     (raw);
+        case SBF_EXTSENSORMEAS: return decode_extsensormeas(raw);
+        case SBF_ATTEULER     : return decode_atteuler     (raw);
     }
     trace(3,"sbf unsupported message: type=%d\n",type);
     return 0;
@@ -914,6 +1106,7 @@ static int sync_sbf(uint8_t *buff, uint8_t data)
 * fetch next SBF raw data and input a mesasge from stream
 * args   : raw_t *raw       IO  receiver raw data control struct
 *          rtcm_t *rtcm     IO  rtcm control struct
+*          int    index     I   input stream index
 *          uint_t data      I   stream data (1 byte)
 * return : status (-1: error message, 0: no message, 1: input observation data,
 *                  2: input ephemeris, 3: input sbas message,
@@ -921,9 +1114,10 @@ static int sync_sbf(uint8_t *buff, uint8_t data)
 *
 * notes  : supported SBF block (block ID):
 *
-*           MEASEPOCH(4027), GPSRAWCA(4017), GLORAWCA(4026), GALRAWFNAV(4022),
-*           GALRAWINAV(4023), GEORAWL1(4020), BDSRAW(4047), QZSRAWL1CA(4066),
-*           NAVICRAW(4093)
+*           MEASEPOCH(4027), MEASEXTRA(4000), GPSRAWCA(4017), GLORAWCA(4026),
+*           GALRAWFNAV(4022), GALRAWINAV(4023), GEORAWL1(4020), BDSRAW(4047),
+*           QZSRAWL1CA(4066), QZSRAWL6(4069), QZSRAWL6D(4270), QZSRAWL6E(4271),
+*           NAVICRAW(4093), EXTSENSORMEAS(4050), ATTEULER(5938)
 *
 *          to specify input options for sbf, set raw->opt to the following
 *          option strings separated by spaces.
@@ -942,7 +1136,7 @@ static int sync_sbf(uint8_t *buff, uint8_t data)
 *          -GALINAV: select I/NAV for Galileo ephemeris (default: all)
 *          -GALFNAV: select F/NAV for Galileo ephemeris (default: all)
 *-----------------------------------------------------------------------------*/
-extern int input_sbf(raw_t *raw, rtcm_t *rtcm, uint8_t data)
+extern int input_sbf(raw_t *raw, rtcm_t *rtcm, int index, uint8_t data)
 {
     trace(5,"input_sbf: data=%02x\n",data);
     
@@ -963,16 +1157,17 @@ extern int input_sbf(raw_t *raw, rtcm_t *rtcm, uint8_t data)
     raw->nbyte=0;
     
     /* decode SBF block */
-    return decode_sbf(raw, rtcm);
+    return decode_sbf(raw, rtcm, index);
 }
 /* input SBF raw data from file ------------------------------------------------
 * fetch next SBF raw data and input a message from file
 * args   : raw_t *raw       IO  receiver raw data control struct
 *          rtcm_t *rtcm     IO  rtcm control struct
+*          int    index     I   input stream index
 *          FILE  *fp        I   file pointer
 * return : status(-2: end of file, -1...9: same as above)
 *-----------------------------------------------------------------------------*/
-extern int input_sbff(raw_t *raw, rtcm_t *rtcm, FILE *fp)
+extern int input_sbff(raw_t *raw, rtcm_t *rtcm, int index, FILE *fp)
 {
     int i,data;
     
@@ -998,6 +1193,6 @@ extern int input_sbff(raw_t *raw, rtcm_t *rtcm, FILE *fp)
     raw->nbyte=0;
     
     /* decode SBF block */
-    return decode_sbf(raw, rtcm);
+    return decode_sbf(raw, rtcm, index);
 }
 

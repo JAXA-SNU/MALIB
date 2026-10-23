@@ -1,0 +1,125 @@
+================================================================================
+ MALIB RTKNAVI-Qt / RTKPLOT-Qt  — 配布物の権利表示
+================================================================================
+
+■ 本ソフトウェアについて
+
+  RTKNAVI-Qt は MALIB (MADOCA-PPP Library) のリアルタイム測位 GUI、
+  RTKPLOT-Qt は測位解の描画 GUI です。
+  MALIB の Windows GUI (C++Builder/VCL 依存) を Qt へ移植し、Windows と
+  Linux の双方で同一ソースからビルドできるようにしたものです。
+
+--------------------------------------------------------------------------------
+■ 著作権とライセンス
+
+  1) 本アプリケーション (app/qtapp) および MALIB 本体
+
+     Copyright (C) 2007-2023 by T.TAKASU, All rights reserved.
+     Copyright (C) 2023-2026 Japan Aerospace Exploration Agency.
+                             All Rights Reserved.
+     Copyright (C) 2023-2026 TOSHIBA ELECTRONIC TECHNOLOGIES CORPORATION.
+                             All Rights Reserved.
+
+     BSD 2-clause license で配布されます。
+     全文: license/LICENSE_MALIB.txt
+
+  2) Qt
+
+     Copyright (C) The Qt Company Ltd. and other contributors.
+
+     本アプリケーションは Qt 6 を **動的リンク** して利用しています。
+     Qt は LGPLv3 の条件下で利用しています。Qt 自体への改変は行っていません。
+
+     LGPLv3 が求める「利用者がライブラリを差し替えられること」を満たすため、
+     Qt のライブラリは実行ファイルとは別のファイル (下記 DLL) として
+     同梱しています。これらを同じバージョン系列の Qt ライブラリに
+     置き換えて本アプリケーションを実行することが可能です。
+
+       Qt6Core.dll / Qt6Gui.dll / Qt6Widgets.dll
+       Qt6Network.dll / Qt6Svg.dll
+       plugins: platforms/ styles/ imageformats/ iconengines/
+                networkinformation/ tls/ generic/
+
+     関連文書:
+       license/Qt_LICENSE_overview.txt  Qt のライセンス方針 (The Qt Company)
+       license/Qt_lgpl.html             LGPLv3 に関する Qt の説明
+       license/Qt_COPYING.txt           Qt 同梱の COPYING
+       license/Qt_Copyright.txt         Qt の著作権表示
+
+     ※ LGPLv3 のライセンス条文そのものは Qt のインストールに平文で
+        含まれていなかったため本配布物には収録していません。正式な条文は
+        下記から取得してください。再配布時には条文の同梱を推奨します。
+          https://www.gnu.org/licenses/lgpl-3.0.txt
+
+  3) MinGW-w64 ランタイム
+
+     libgcc_s_seh-1.dll / libstdc++-6.dll / libwinpthread-1.dll
+
+     GCC ランタイムライブラリ例外付きの GPLv3 および MinGW-w64 の
+     ライセンスに従います。詳細は MinGW-w64 / GCC の配布元を参照ください。
+
+--------------------------------------------------------------------------------
+■ 使用上の注意 (実装・検証の状況)
+
+  本バージョンには未実装・未検証の機能があります。導入前に確認してください。
+
+  【未実装 — RTKNAVI-Qt】
+    - Mark 機能 (ボタンは無効)
+    - 設定値の妥当性検査 (範囲外の値を入力しても警告されません)
+
+  【未実装 — RTKPLOT-Qt】
+    - プロット種別のうち Residuals / Obs Data / Sky Plot / DOP / SNR-MP
+      (実装済みは Gnd Trk / Position / Velocity / Accel / NSat-Age-Ratio)
+    - 地図画像・Shapefile・Waypoint・Elev Mask の読込、各種 Save
+    - 時刻スクロールバー、アニメーション
+    - Options のうち上記未実装機能に属する項目
+      (ダイアログ上でグレーアウトされ、理由がツールチップに出ます)
+
+  【未検証】
+    - 長時間運用およびファイルスワップ出力 (::S=)
+    - Qt 未導入の他 PC への配布
+
+  【検証済み】
+    - 実機動作試験 (2026-07-31, Windows 11)
+      u-blox / Septentrio / NovAtel のシリアル接続、NTRIP、MADOCA-PPP(L6)
+    - Options 設定 174 項目の書き換え試験 (305 ケース / 失敗 0)
+      Windows・Linux の両環境で実施
+    - CUI 版 rtkrcv との測位結果照合 (3642 エポックで完全一致)
+    - Windows 版と Linux 版の測位結果照合 (収束後の位置差 中央値 0.09 mm)
+
+    演算部で見つかった既知不具合は doc/ 配下の以下を参照してください。
+      doc/BASELIB_ISSUES.md
+
+--------------------------------------------------------------------------------
+■ 起動方法
+
+  bin/rtknavi_qt.exe (測位)、bin/rtkplot_qt.exe (描画) を実行してください。
+  bin/rtknavi_cli.exe は設定点検用のコマンドライン版です
+  (--selftest / --coverage)。GUI 版はシェルが終了を待たないため、
+  出力のリダイレクトや終了コードの取得にはこちらを使用してください。
+  DLL は実行ファイルと同じフォルダに配置されているため、環境変数 PATH の
+  設定は不要です。フォルダ構成を保ったまま移動・コピーしてください。
+
+  設定ファイルを指定して起動する場合:
+    rtknavi_qt.exe -o <設定ファイル>
+    rtknavi_qt.exe -o <設定ファイル> -s     (起動と同時に測位開始)
+
+  RTKPLOT-Qt:
+    rtkplot_qt.exe <解ファイル.pos>
+    rtkplot_qt.exe -p tcpcli://localhost:8888   (起動と同時にリアルタイム接続)
+
+  RTKNAVI-Qt の解を RTKPLOT-Qt でリアルタイム表示する場合は、RTKNAVI 側の
+  出力を TCP Server に、RTKPLOT 側の接続を TCP Client にしてください。
+  両方を TCP Client にすると待ち受ける側がないため接続できません。
+
+  設定は終了時に自動保存され、次回起動時に復元されます。
+  保存先: %APPDATA%\MALIB\rtknavi_qt.conf / rtknavi_qt.ini
+          %APPDATA%\MALIB\rtkplot_qt.ini
+
+--------------------------------------------------------------------------------
+■ 免責
+
+  本ソフトウェアは無保証で提供されます。詳細は BSD 2-clause license の
+  免責条項 (license/LICENSE_MALIB.txt) を参照してください。
+
+================================================================================
